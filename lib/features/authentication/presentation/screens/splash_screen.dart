@@ -24,8 +24,6 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
       context.go('/login');
     } else if (user.isTeacher) {
       context.go('/teacher');
-    } else if (user.isAdmin) {
-      context.go('/admin');
     } else {
       context.go('/student');
     }
@@ -46,14 +44,18 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.face_retouching_natural, size: 80, color: Colors.white.withValues(alpha: 0.95)),
+            Icon(
+              Icons.face_retouching_natural,
+              size: 80,
+              color: Colors.white.withValues(alpha: 0.95),
+            ),
             const SizedBox(height: 24),
             Text(
               'Smart Attendance',
               style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
