@@ -34,6 +34,7 @@ router.get('/auth/me', authenticate, authController.me);
 // Face & device
 router.post('/face/register', authenticate, authorize('student'), faceController.registerEmbeddings);
 router.get('/face/status', authenticate, faceController.getMyEmbeddings);
+router.post('/face/verify', authenticate, faceController.verifyEmbedding);
 router.post('/device/verify', authenticate, faceController.verifyDevice);
 
 // Classes & subjects

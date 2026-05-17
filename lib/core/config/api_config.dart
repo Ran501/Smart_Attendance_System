@@ -15,7 +15,7 @@ class ApiConfig {
   static const String _envUrl = String.fromEnvironment('API_BASE_URL');
 
   /// Your development machine's LAN IP (same Wi‑Fi as the phone).
-  static const String devLanHost = '10.165.52.179';
+  static const String devLanHost = '10.236.218.179';
 
   static const int devPort = 3000;
   static const String apiPath = '/api/v1';

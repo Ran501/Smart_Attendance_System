@@ -22,6 +22,18 @@ async function submitAttendance(req, res) {
     locationAccuracy,
   } = req.body;
 
+  // ─── FIX: validate embedding immediately — null/missing = fail fast ────────
+  if (!Array.isArray(liveEmbedding) || liveEmbedding.length < 192) {
+    console.error('[attendance] REJECTED: liveEmbedding missing or invalid', {
+      type: typeof liveEmbedding,
+      length: Array.isArray(liveEmbedding) ? liveEmbedding.length : 'N/A',
+    });
+    return res.status(400).json({
+      accepted: false,
+      reason: 'Face embedding missing or invalid — ensure face model is loaded on device',
+    });
+  }
+
   const sessionResult = await pool.query(
     `SELECT s.*, cr.latitude as room_lat, cr.longitude as room_lon,
             cr.radius_meters as room_radius_meters,
@@ -119,7 +131,7 @@ async function submitAttendance(req, res) {
       deviceValid: true,
       livenessPassed: livenessPassed || false,
       reason: usesHostLocation
-        ? `Too far from teacher (${Math.round(distToHost)}m, allowed ~${Math.round(allowedRadius)}m with GPS buffer)`
+        ? `Too far from teacher (${Math.round(distToHost)}m, allowed ~${Math.round(allowedRadius)}m)`
         : 'Outside classroom geo-fence',
     });
     return res.status(403).json({
@@ -162,22 +174,38 @@ async function submitAttendance(req, res) {
     return res.status(403).json({ accepted: false, reason: 'Liveness verification failed' });
   }
 
+  // ─── FACE MATCHING ────────────────────────────────────────────────────────
   const stored = await pool.query(
-    `SELECT embedding FROM face_embeddings WHERE user_id = $1`,
+    `SELECT id, angle_type, embedding FROM face_embeddings WHERE user_id = $1`,
     [req.user.id],
   );
   if (!stored.rows.length) {
     return res.status(400).json({ accepted: false, reason: 'Face not registered' });
   }
 
+  // FIX: add detailed similarity logging so you can see scores in the terminal
+  console.log('\n=== FACE MATCH DEBUG ===');
+  console.log(`User: ${req.user.id}`);
+  console.log(`Live embedding dims: ${liveEmbedding.length}`);
+  console.log(`Live embedding sample: [${liveEmbedding.slice(0, 5).map(v => v.toFixed(4)).join(', ')}]`);
+  console.log(`Stored embeddings: ${stored.rows.length}`);
+
   let bestSimilarity = 0;
   for (const row of stored.rows) {
-    const emb = typeof row.embedding === 'string' ? JSON.parse(row.embedding) : row.embedding;
+    const emb = typeof row.embedding === 'string'
+      ? JSON.parse(row.embedding)
+      : row.embedding;
     const sim = cosineSimilarity(liveEmbedding, emb);
+    console.log(`  [${row.angle_type}] dims: ${emb.length}, similarity: ${sim.toFixed(4)}`);
     if (sim > bestSimilarity) bestSimilarity = sim;
   }
 
-  const threshold = config.faceMatchThreshold;
+  const threshold = config.faceMatchThreshold ?? 0.65;
+  console.log(`Best similarity: ${bestSimilarity.toFixed(4)}`);
+  console.log(`Threshold: ${threshold}`);
+  console.log(`Result: ${bestSimilarity >= threshold ? '✅ MATCH' : '❌ NO MATCH'}`);
+  console.log('========================\n');
+
   if (bestSimilarity < threshold) {
     await logFraud(req.user.id, sessionId, 'FACE_MISMATCH', { confidence: bestSimilarity });
     await recordRejected(session, req.user.id, latitude, longitude, bestSimilarity, {
@@ -189,7 +217,7 @@ async function submitAttendance(req, res) {
     });
     return res.status(403).json({
       accepted: false,
-      reason: 'Face verification failed',
+      reason: `Face not recognized (${(bestSimilarity * 100).toFixed(1)}% match, need ${(threshold * 100).toFixed(0)}%)`,
       confidence: bestSimilarity,
     });
   }
@@ -200,15 +228,7 @@ async function submitAttendance(req, res) {
      (session_id, class_id, student_id, status, match_confidence, latitude, longitude,
       geo_valid, wifi_valid, device_valid, liveness_passed)
      VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, true, true)`,
-    [
-      sessionId,
-      session.class_id,
-      req.user.id,
-      status,
-      bestSimilarity,
-      latitude,
-      longitude,
-    ],
+    [sessionId, session.class_id, req.user.id, status, bestSimilarity, latitude, longitude],
   );
 
   await logAudit(req.user.id, 'ATTENDANCE_MARKED', 'attendance_record', sessionId, {

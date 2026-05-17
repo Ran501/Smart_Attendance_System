@@ -62,9 +62,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       await _camera!.initialize();
       if (mounted) setState(() {});
     } catch (e) {
-      if (mounted) {
-        setState(() => _instruction = 'Camera error: $e');
-      }
+      if (mounted) setState(() => _instruction = 'Camera error: $e');
     }
   }
 
@@ -93,11 +91,16 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
           _liveness.startChallenge(_challenges[_challengeIndex]);
           setState(() {
             _progress = 0;
-            _instruction = 'Next: ${_challenges[_challengeIndex].name}';
+            _instruction = _challengeInstructionText(
+              _challenges[_challengeIndex],
+            );
           });
         } else {
           setState(() => _livenessComplete = true);
-          await _submitAttendance(await File(file.path).readAsBytes(), faces.first);
+          await _submitAttendance(
+            await File(file.path).readAsBytes(),
+            faces.first,
+          );
         }
       }
     } catch (e) {
@@ -107,21 +110,66 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
     }
   }
 
+  String _challengeInstructionText(LivenessChallenge c) {
+    switch (c) {
+      case LivenessChallenge.smile:
+        return 'Now smile at the camera';
+      case LivenessChallenge.turnHeadLeft:
+        return 'Now slowly turn your head LEFT';
+      case LivenessChallenge.turnHeadRight:
+        return 'Now slowly turn your head RIGHT';
+      case LivenessChallenge.blinkTwice:
+        return 'Now blink twice';
+    }
+  }
+
   Future<void> _submitAttendance(List<int> bytes, Face face) async {
     setState(() {
       _submitting = true;
-      _instruction = 'Validating location & device...';
+      _instruction = 'Generating face embedding...';
     });
 
     try {
-      final session = widget.sessionData['session'] as Map<String, dynamic>? ?? {};
-      final position = await _geo.getBestPosition();
-      if (position == null) {
-        _showResult(false, 'Could not get your location. Enable GPS and try outdoors or near a window.');
+      // FIX: generate and validate embedding FIRST before any network calls
+      final embedding = await _embedding.generateEmbedding(
+        Uint8List.fromList(bytes),
+        face,
+      );
+
+      // FIX: guard null — model not loaded means we cannot verify face
+      if (embedding == null) {
+        _showResult(
+          false,
+          'Face recognition model failed to load.\n\n'
+          'Make sure mobile_face_net.tflite is in assets/models/ '
+          'and declared in pubspec.yaml.',
+        );
         return;
       }
 
-      // Bind this phone to the account if not already registered
+      // FIX: sanity check embedding looks valid (not all zeros)
+      final hasSignal = embedding.any((v) => v.abs() > 0.001);
+      if (!hasSignal) {
+        _showResult(
+          false,
+          'Face embedding is invalid (all zeros). Please re-register your face.',
+        );
+        return;
+      }
+
+      setState(() => _instruction = 'Validating location & device...');
+
+      final session =
+          widget.sessionData['session'] as Map<String, dynamic>? ?? {};
+      final position = await _geo.getBestPosition();
+      if (position == null) {
+        _showResult(
+          false,
+          'Could not get your location. Enable GPS and try outdoors or near a window.',
+        );
+        return;
+      }
+
       try {
         await _device.verifyDevice();
       } catch (e) {
@@ -136,18 +184,23 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       final deviceId = await _device.getDeviceId();
       final fingerprint = await _device.getDeviceFingerprint();
 
-      final usesHost = session['uses_host_location'] == true ||
+      final usesHost =
+          session['uses_host_location'] == true ||
           session['host_latitude'] != null;
-      final baseRadius =
-          (session['radius_meters'] as num?)?.toDouble();
-      final centerLat = (session['latitude'] as num?)?.toDouble() ??
+      final baseRadius = (session['radius_meters'] as num?)?.toDouble();
+      final centerLat =
+          (session['latitude'] as num?)?.toDouble() ??
           (session['host_latitude'] as num?)?.toDouble();
-      final centerLon = (session['longitude'] as num?)?.toDouble() ??
+      final centerLon =
+          (session['longitude'] as num?)?.toDouble() ??
           (session['host_longitude'] as num?)?.toDouble();
       final hostAccuracy = (session['host_accuracy'] as num?)?.toDouble();
 
       if (centerLat == null || centerLon == null) {
-        _showResult(false, 'Session location missing. Ask teacher to restart the session.');
+        _showResult(
+          false,
+          'Session location missing. Ask teacher to restart the session.',
+        );
         return;
       }
 
@@ -166,8 +219,8 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
           false,
           usesHost
               ? 'GPS shows ${proximity.distanceMeters.toStringAsFixed(0)}m from teacher '
-                  '(allowed ~${proximity.allowedRadiusMeters.toStringAsFixed(0)}m). '
-                  'Stand closer together and try again.'
+                    '(allowed ~${proximity.allowedRadiusMeters.toStringAsFixed(0)}m). '
+                    'Stand closer together and try again.'
               : 'Outside classroom geo-fence',
         );
         return;
@@ -180,22 +233,18 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
           allowedSsid: session['allowed_wifi_ssid'] as String?,
           allowedBssid: session['allowed_wifi_bssid'] as String?,
         );
-
         if (!wifiOk) {
           _showResult(false, 'Not connected to campus WiFi');
           return;
         }
       }
 
-      final embedding = await _embedding.generateEmbedding(
-        Uint8List.fromList(bytes),
-        face,
-      );
+      setState(() => _instruction = 'Submitting attendance...');
 
       final result = await AttendanceService().submitAttendance({
         'sessionId': widget.sessionData['sessionId'],
         'sessionToken': widget.sessionData['sessionToken'],
-        'liveEmbedding': embedding,
+        'liveEmbedding': embedding, // now guaranteed non-null, non-zero
         'latitude': position.latitude,
         'longitude': position.longitude,
         'wifiSsid': wifi.ssid,
@@ -211,8 +260,8 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       final message = accepted
           ? (result['message'] as String? ?? 'Attendance recorded')
           : (result['reason'] as String? ??
-              result['message'] as String? ??
-              'Attendance rejected');
+                result['message'] as String? ??
+                'Attendance rejected');
 
       _showResult(
         accepted,
@@ -228,11 +277,13 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
 
   String _friendlyError(Object e) {
     final text = e.toString();
-    if (text.startsWith('Exception: ')) return text.substring('Exception: '.length);
+    if (text.startsWith('Exception: '))
+      return text.substring('Exception: '.length);
     return text;
   }
 
   void _showResult(bool success, String message, {double? confidence}) {
+    if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -265,9 +316,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
     final camera = _camera;
     _camera = null;
     if (camera != null) {
-      if (camera.value.isStreamingImages) {
-        await camera.stopImageStream();
-      }
+      if (camera.value.isStreamingImages) await camera.stopImageStream();
       await camera.dispose();
     }
   }
@@ -306,7 +355,8 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Step ${_challengeIndex + 1}/${_challenges.length}: ${_challenges[_challengeIndex].name}',
+                    'Step ${_challengeIndex + 1}/${_challenges.length}: '
+                    '${_challenges[_challengeIndex].name}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 8),
