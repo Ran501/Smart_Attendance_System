@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -5,6 +6,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../../../../core/constants/app_constants.dart';
 import '../../../../services/attendance_service.dart';
+import '../../../../services/geo_fence_service.dart';
 import '../../../../services/report_service.dart';
 import '../../../../widgets/session_timer.dart';
 
@@ -22,12 +24,36 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   List<dynamic> _attendance = [];
   String? _qrPayload;
   io.Socket? _socket;
+  Timer? _locationTimer;
+  final _geo = GeoFenceService();
 
   @override
   void initState() {
     super.initState();
     _load();
     _connectSocket();
+    _startLocationRefresh();
+  }
+
+  void _startLocationRefresh() {
+    _refreshTeacherLocation();
+    _locationTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _refreshTeacherLocation(),
+    );
+  }
+
+  Future<void> _refreshTeacherLocation() async {
+    try {
+      final pos = await _geo.getBestPosition(maxSamples: 2);
+      if (pos == null) return;
+      await AttendanceService().updateSessionLocation(
+        sessionId: widget.sessionId,
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+        accuracy: pos.accuracy,
+      );
+    } catch (_) {}
   }
 
   @override
@@ -66,6 +92,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
 
   @override
   void dispose() {
+    _locationTimer?.cancel();
     _socket?.disconnect();
     _socket?.dispose();
     super.dispose();
@@ -135,7 +162,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
               ),
             const SizedBox(height: 16),
             Text(
-              'Students scan this QR to mark attendance',
+              'Keep this screen open — your location refreshes every 15s so nearby students can mark attendance.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium,
             ),

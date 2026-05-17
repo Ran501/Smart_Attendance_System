@@ -1,6 +1,6 @@
 const pool = require('../database/pool');
 const config = require('../config');
-const { isInsideGeoFence } = require('../utils/geo');
+const { isInsideGeoFence, checkHostProximity, distanceMeters } = require('../utils/geo');
 const { cosineSimilarity } = require('../utils/face');
 const { logAudit, logFraud } = require('../services/auditService');
 const { expireStaleSessions } = require('./sessionController');
@@ -19,11 +19,13 @@ async function submitAttendance(req, res) {
     deviceFingerprint,
     livenessPassed,
     livenessScore,
+    locationAccuracy,
   } = req.body;
 
   const sessionResult = await pool.query(
     `SELECT s.*, cr.latitude as room_lat, cr.longitude as room_lon,
-            cr.radius_meters, cr.allowed_wifi_ssid, cr.allowed_wifi_bssid, cr.allowed_subnet
+            cr.radius_meters as room_radius_meters,
+            cr.allowed_wifi_ssid, cr.allowed_wifi_bssid, cr.allowed_subnet
      FROM attendance_sessions s
      LEFT JOIN classrooms cr ON cr.id = s.classroom_id
      WHERE s.id = $1 AND s.session_token = $2 AND s.status = 'active' AND s.ends_at > NOW()`,
@@ -45,7 +47,14 @@ async function submitAttendance(req, res) {
 
   const device = await pool.query('SELECT * FROM devices WHERE user_id = $1', [req.user.id]);
   let deviceValid = false;
-  if (device.rows.length) {
+  if (device.rows.length === 0) {
+    await pool.query(
+      `INSERT INTO devices (user_id, device_id, device_fingerprint, device_name)
+       VALUES ($1, $2, $3, 'Mobile Device')`,
+      [req.user.id, deviceId, deviceFingerprint],
+    );
+    deviceValid = true;
+  } else {
     deviceValid =
       device.rows[0].device_id === deviceId &&
       device.rows[0].device_fingerprint === deviceFingerprint;
@@ -62,25 +71,69 @@ async function submitAttendance(req, res) {
     return res.status(403).json({ accepted: false, reason: 'Device verification failed' });
   }
 
-  const geoValid = isInsideGeoFence(latitude, longitude, {
-    latitude: session.room_lat,
-    longitude: session.room_lon,
-    radius_meters: session.radius_meters,
-  });
+  const usesHostLocation =
+    session.host_latitude != null && session.host_longitude != null;
+  const centerLat = usesHostLocation ? session.host_latitude : session.room_lat;
+  const centerLon = usesHostLocation ? session.host_longitude : session.room_lon;
+  const baseRadius = usesHostLocation
+    ? session.radius_meters
+    : session.room_radius_meters ?? 30;
+
+  let geoValid;
+  let distToHost;
+  let allowedRadius;
+
+  if (usesHostLocation) {
+    const proximity = checkHostProximity({
+      studentLat: latitude,
+      studentLon: longitude,
+      hostLat: centerLat,
+      hostLon: centerLon,
+      baseRadius,
+      hostAccuracy: session.host_accuracy,
+      studentAccuracy: locationAccuracy,
+    });
+    geoValid = proximity.valid;
+    distToHost = proximity.distance;
+    allowedRadius = proximity.allowedRadius;
+  } else {
+    distToHost = distanceMeters(latitude, longitude, centerLat, centerLon);
+    allowedRadius = baseRadius ?? 30;
+    geoValid = isInsideGeoFence(latitude, longitude, {
+      latitude: centerLat,
+      longitude: centerLon,
+      radius_meters: allowedRadius,
+    });
+  }
+
   if (!geoValid) {
-    await logFraud(req.user.id, sessionId, 'GEO_FENCE_FAILED', { latitude, longitude });
+    await logFraud(req.user.id, sessionId, 'GEO_FENCE_FAILED', {
+      latitude,
+      longitude,
+      distanceMeters: distToHost,
+      allowedRadius,
+    });
     await recordRejected(session, req.user.id, latitude, longitude, 0, {
       geoValid: false,
       wifiValid: false,
       deviceValid: true,
       livenessPassed: livenessPassed || false,
-      reason: 'Outside classroom geo-fence',
+      reason: usesHostLocation
+        ? `Too far from teacher (${Math.round(distToHost)}m, allowed ~${Math.round(allowedRadius)}m with GPS buffer)`
+        : 'Outside classroom geo-fence',
     });
-    return res.status(403).json({ accepted: false, reason: 'Outside classroom area' });
+    return res.status(403).json({
+      accepted: false,
+      reason: usesHostLocation
+        ? `Too far from teacher (${Math.round(distToHost)}m away, allowed ~${Math.round(allowedRadius)}m — stand closer or wait for GPS to settle)`
+        : 'Outside classroom area',
+      distanceMeters: distToHost,
+      allowedRadiusMeters: allowedRadius,
+    });
   }
 
   let wifiValid = true;
-  if (session.allowed_wifi_ssid) {
+  if (!usesHostLocation && session.allowed_wifi_ssid) {
     wifiValid =
       wifiSsid === session.allowed_wifi_ssid ||
       (session.allowed_wifi_bssid && wifiBssid === session.allowed_wifi_bssid);

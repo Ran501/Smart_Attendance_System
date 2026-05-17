@@ -1,8 +1,24 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../core/constants/app_constants.dart';
+
+/// Result of proximity check (matches backend formula).
+class GeoProximityResult {
+  final bool valid;
+  final double distanceMeters;
+  final double allowedRadiusMeters;
+  final double baseRadiusMeters;
+
+  const GeoProximityResult({
+    required this.valid,
+    required this.distanceMeters,
+    required this.allowedRadiusMeters,
+    required this.baseRadiusMeters,
+  });
+}
 
 class GeoFenceService {
   static final GeoFenceService _instance = GeoFenceService._internal();
@@ -11,34 +27,78 @@ class GeoFenceService {
 
   StreamSubscription<Position>? _positionStream;
   bool _isMonitoring = false;
-  Position? _currentPosition;
 
-  // College campus boundaries (example - replace with actual coordinates)
-  static const double campusLatitude =
-      28.6139; // Replace with your college latitude
-  static const double campusLongitude =
-      77.2090; // Replace with your college longitude
-  static const double campusRadius = 500; // Radius in meters
+  static const double campusLatitude = 28.6139;
+  static const double campusLongitude = 77.2090;
+  static const double campusRadius = 500;
 
-  // Check and request location permissions
+  double _normalizeAccuracy(double? accuracy) {
+    if (accuracy == null || accuracy <= 0) {
+      return AppConstants.gpsFixedBufferMeters;
+    }
+    return math.min(accuracy, AppConstants.maxAccuracyBufferMeters);
+  }
+
+  double effectiveAllowedRadius({
+    double? baseRadius,
+    double? hostAccuracy,
+    double? studentAccuracy,
+  }) {
+    final base = baseRadius ?? AppConstants.hostSessionBaseRadiusMeters;
+    return base +
+        AppConstants.gpsFixedBufferMeters +
+        _normalizeAccuracy(hostAccuracy) +
+        _normalizeAccuracy(studentAccuracy);
+  }
+
+  GeoProximityResult checkHostProximity({
+    required double studentLat,
+    required double studentLon,
+    required double hostLat,
+    required double hostLon,
+    double? baseRadius,
+    double? hostAccuracy,
+    double? studentAccuracy,
+  }) {
+    final distance = Geolocator.distanceBetween(
+      studentLat,
+      studentLon,
+      hostLat,
+      hostLon,
+    );
+    final allowed = effectiveAllowedRadius(
+      baseRadius: baseRadius,
+      hostAccuracy: hostAccuracy,
+      studentAccuracy: studentAccuracy,
+    );
+    final base = baseRadius ?? AppConstants.hostSessionBaseRadiusMeters;
+    return GeoProximityResult(
+      valid: distance <= allowed,
+      distanceMeters: distance,
+      allowedRadiusMeters: allowed,
+      baseRadiusMeters: base,
+    );
+  }
+
   Future<bool> requestLocationPermission() async {
+    final ctx = navigatorKey.currentContext;
     final status = await Permission.location.request();
-
     if (status.isGranted) {
-      // Also request background location for Android
       if (await Permission.location.isGranted) {
         await Permission.locationAlways.request();
       }
       return true;
     } else if (status.isDenied) {
-      ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Location permission is required for attendance verification',
+      if (ctx != null && ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Location permission is required for attendance verification',
+            ),
+            backgroundColor: Colors.orange,
           ),
-          backgroundColor: Colors.orange,
-        ),
-      );
+        );
+      }
       return false;
     } else if (status.isPermanentlyDenied) {
       openAppSettings();
@@ -47,62 +107,73 @@ class GeoFenceService {
     return false;
   }
 
-  // Check if location services are enabled
   Future<bool> isLocationServiceEnabled() async {
-    return await Geolocator.isLocationServiceEnabled();
+    return Geolocator.isLocationServiceEnabled();
   }
 
-  // Get current position with retry logic
+  /// Single quick fix (legacy).
   Future<Position?> getCurrentPosition({int retries = 3}) async {
-    for (int i = 0; i < retries; i++) {
+    return getBestPosition(maxSamples: retries);
+  }
+
+  /// Takes several GPS samples and returns the most accurate fix.
+  Future<Position?> getBestPosition({int maxSamples = 5}) async {
+    if (!await requestLocationPermission()) return null;
+    if (!await isLocationServiceEnabled()) return null;
+
+    Position? best;
+    for (var i = 0; i < maxSamples; i++) {
       try {
-        // Check permissions first
-        if (!await requestLocationPermission()) {
-          return null;
-        }
-
-        // Check if location services are enabled
-        if (!await isLocationServiceEnabled()) {
-          ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
-            const SnackBar(
-              content: Text('Please enable location services'),
-              backgroundColor: Colors.orange,
-              action: SnackBarAction(
-                label: 'Open Settings',
-                onPressed: Geolocator.openLocationSettings,
-              ),
-            ),
-          );
-          return null;
-        }
-
-        // Get position with timeout
         final position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-          timeLimit: const Duration(seconds: 10),
-        ).timeout(const Duration(seconds: 15));
-
-        _currentPosition = position;
-        return position;
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.best,
+            timeLimit: Duration(seconds: 12),
+          ),
+        );
+        if (best == null ||
+            (position.accuracy > 0 &&
+                (best.accuracy <= 0 || position.accuracy < best.accuracy))) {
+          best = position;
+        }
+        if (best.accuracy > 0 && best.accuracy <= 8) break;
       } catch (e) {
-        debugPrint('Error getting location (attempt ${i + 1}): $e');
-        if (i == retries - 1) return null;
-        await Future.delayed(Duration(seconds: i + 1));
+        debugPrint('GPS sample ${i + 1} failed: $e');
+      }
+      if (i < maxSamples - 1) {
+        await Future.delayed(Duration(milliseconds: 400 + i * 200));
       }
     }
-    return null;
+
+    return best;
   }
 
-  // Calculate distance between two coordinates
   double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
     return Geolocator.distanceBetween(lat1, lon1, lat2, lon2);
   }
 
-  // Check if user is within campus geofence
+  bool isInsideRadius({
+    required double studentLat,
+    required double studentLon,
+    required double centerLat,
+    required double centerLon,
+    required double radiusMeters,
+    double? hostAccuracy,
+    double? studentAccuracy,
+  }) {
+    return checkHostProximity(
+      studentLat: studentLat,
+      studentLon: studentLon,
+      hostLat: centerLat,
+      hostLon: centerLon,
+      baseRadius: radiusMeters,
+      hostAccuracy: hostAccuracy,
+      studentAccuracy: studentAccuracy,
+    ).valid;
+  }
+
   Future<Map<String, dynamic>> isWithinCampus() async {
     try {
-      final position = await getCurrentPosition();
-
+      final position = await getBestPosition();
       if (position == null) {
         return {
           'withinCampus': false,
@@ -118,10 +189,8 @@ class GeoFenceService {
         campusLongitude,
       );
 
-      final withinCampus = distance <= campusRadius;
-
       return {
-        'withinCampus': withinCampus,
+        'withinCampus': distance <= campusRadius,
         'distance': distance,
         'distanceText': _formatDistance(distance),
         'location': {
@@ -139,124 +208,39 @@ class GeoFenceService {
     }
   }
 
-  // Validate location for attendance
   Future<bool> validateLocationForAttendance() async {
     try {
-      // First check if location services are enabled
-      if (!await isLocationServiceEnabled()) {
-        _showErrorDialog('Location services are disabled. Please enable GPS.');
-        return false;
-      }
-
-      // Check permissions
-      if (!await requestLocationPermission()) {
-        _showErrorDialog('Location permission is required for attendance');
-        return false;
-      }
-
-      // Get location with loading indicator
-      _showLoadingDialog('Verifying your location...');
-
+      if (!await isLocationServiceEnabled()) return false;
+      if (!await requestLocationPermission()) return false;
       final campusCheck = await isWithinCampus();
-      Navigator.of(navigatorKey.currentContext!).pop(); // Close loading dialog
-
-      if (campusCheck['error'] != null) {
-        _showErrorDialog(campusCheck['error']);
-        return false;
-      }
-
-      if (!campusCheck['withinCampus']) {
-        _showErrorDialog(
-          'You are outside the college campus.\n'
-          'Distance from campus: ${campusCheck['distanceText']}\n'
-          'Please move within ${(campusRadius / 1000).toStringAsFixed(1)}km of the campus.',
-        );
-        return false;
-      }
-
-      // Success - within campus
-      _showSuccessDialog('Location verified! You are within the campus.');
-      return true;
-    } catch (e) {
-      _showErrorDialog('Location verification failed: ${e.toString()}');
+      return campusCheck['withinCampus'] == true;
+    } catch (_) {
       return false;
     }
   }
 
-  // Start monitoring location changes
   void startLocationMonitoring(Function(Position) onLocationChanged) {
     if (_isMonitoring) return;
-
-    _positionStream =
-        Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 10, // Update every 10 meters
-          ),
-        ).listen((position) {
-          _currentPosition = position;
-          onLocationChanged(position);
-        });
-
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.best,
+        distanceFilter: 5,
+      ),
+    ).listen(onLocationChanged);
     _isMonitoring = true;
   }
 
-  // Stop monitoring
   void stopLocationMonitoring() {
     _positionStream?.cancel();
     _isMonitoring = false;
   }
 
-  // Helper methods
   String _formatDistance(double meters) {
     if (meters >= 1000) {
       return '${(meters / 1000).toStringAsFixed(2)} km';
     }
     return '${meters.toStringAsFixed(0)} meters';
   }
-
-  void _showLoadingDialog(String message) {
-    showDialog(
-      context: navigatorKey.currentContext!,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 16),
-            Text(message),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showErrorDialog(String message) {
-    ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-        duration: const Duration(seconds: 5),
-        action: SnackBarAction(
-          label: 'Retry',
-          onPressed: () {},
-          textColor: Colors.white,
-        ),
-      ),
-    );
-  }
-
-  void _showSuccessDialog(String message) {
-    ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.green,
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
 }
 
-// Global navigator key for showing dialogs without context
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();

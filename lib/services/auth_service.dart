@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_model.dart';
 import 'api_client.dart';
@@ -7,15 +8,19 @@ class AuthService {
   final _api = ApiClient.instance;
 
   Future<({String token, UserModel user})> login(String email, String password) async {
-    final res = await _api.dio.post('/auth/login', data: {
-      'email': email,
-      'password': password,
-    });
-    final token = res.data['token'] as String;
-    final user = UserModel.fromJson(res.data['user'] as Map<String, dynamic>);
-    await _api.saveToken(token);
-    await _persistUser(user);
-    return (token: token, user: user);
+    try {
+      final res = await _api.dio.post('/auth/login', data: {
+        'email': email,
+        'password': password,
+      });
+      final token = res.data['token'] as String;
+      final user = UserModel.fromJson(res.data['user'] as Map<String, dynamic>);
+      await _api.saveToken(token);
+      await _persistUser(user);
+      return (token: token, user: user);
+    } on DioException catch (e) {
+      throw Exception(ApiClient.messageFromDio(e));
+    }
   }
 
   Future<({String token, UserModel user})> register({
@@ -25,18 +30,22 @@ class AuthService {
     required String role,
     String? studentId,
   }) async {
-    final res = await _api.dio.post('/auth/register', data: {
-      'email': email,
-      'password': password,
-      'fullName': fullName,
-      'role': role,
-      if (studentId != null) 'studentId': studentId,
-    });
-    final token = res.data['token'] as String;
-    final user = UserModel.fromJson(res.data['user'] as Map<String, dynamic>);
-    await _api.saveToken(token);
-    await _persistUser(user);
-    return (token: token, user: user);
+    try {
+      final res = await _api.dio.post('/auth/register', data: {
+        'email': email,
+        'password': password,
+        'fullName': fullName,
+        'role': role,
+        if (studentId != null) 'studentId': studentId,
+      });
+      final token = res.data['token'] as String;
+      final user = UserModel.fromJson(res.data['user'] as Map<String, dynamic>);
+      await _api.saveToken(token);
+      await _persistUser(user);
+      return (token: token, user: user);
+    } on DioException catch (e) {
+      throw Exception(ApiClient.messageFromDio(e));
+    }
   }
 
   Future<UserModel?> restoreSession() async {

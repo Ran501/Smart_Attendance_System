@@ -34,24 +34,32 @@ async function seed() {
       [passwordHash],
     );
 
-    const teacherId = teacher.rows[0]?.id;
-    if (teacherId) {
-      await pool.query(
-        `INSERT INTO subjects (id, name, code, class_id, teacher_id)
-         VALUES ('SUB-CS101', 'Data Structures', 'CS101', 'CST-S5-A', $1)
-         ON CONFLICT (id) DO NOTHING`,
-        [teacherId],
-      );
-    }
+    // Always link demo teacher/subject/enrollment (works even if users already existed)
+    await pool.query(
+      `INSERT INTO subjects (id, name, code, class_id, teacher_id)
+       VALUES ('SUB-CS101', 'Data Structures', 'CS101', 'CST-S5-A',
+         (SELECT id FROM users WHERE email = 'teacher@college.edu'))
+       ON CONFLICT (id) DO UPDATE SET
+         teacher_id = COALESCE(subjects.teacher_id,
+           (SELECT id FROM users WHERE email = 'teacher@college.edu'))`,
+    );
 
-    const studentId = student.rows[0]?.id;
-    if (studentId) {
-      await pool.query(
-        `INSERT INTO class_enrollments (student_id, class_id)
-         VALUES ($1, 'CST-S5-A') ON CONFLICT DO NOTHING`,
-        [studentId],
-      );
-    }
+    await pool.query(
+      `INSERT INTO class_enrollments (student_id, class_id)
+       SELECT u.id, 'CST-S5-A' FROM users u WHERE u.email = 'student@college.edu'
+       ON CONFLICT DO NOTHING`,
+    );
+
+    // Enroll any student account that has no class yet
+    await pool.query(
+      `INSERT INTO class_enrollments (student_id, class_id)
+       SELECT u.id, 'CST-S5-A' FROM users u
+       WHERE u.role = 'student'
+         AND NOT EXISTS (
+           SELECT 1 FROM class_enrollments ce WHERE ce.student_id = u.id
+         )
+       ON CONFLICT DO NOTHING`,
+    );
 
     await pool.query(
       `INSERT INTO classrooms (name, class_id, latitude, longitude, radius_meters, allowed_wifi_ssid)

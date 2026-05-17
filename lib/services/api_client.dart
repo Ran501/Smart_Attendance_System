@@ -38,4 +38,44 @@ class ApiClient {
   Future<void> clearToken() => _storage.delete(key: 'auth_token');
 
   Future<String?> getToken() => _storage.read(key: 'auth_token');
+
+  static String messageFromDio(DioException error) {
+    final data = error.response?.data;
+    if (data is Map) {
+      if (data['error'] != null) {
+        return data['error'].toString();
+      }
+      final errors = data['errors'];
+      if (errors is List && errors.isNotEmpty) {
+        return errors
+            .map((e) {
+              if (e is Map) {
+                final field = e['path'] ?? e['param'];
+                final msg = e['msg'] ?? e['message'];
+                return field != null ? '$field: $msg' : '$msg';
+              }
+              return e.toString();
+            })
+            .join('\n');
+      }
+    }
+
+    switch (error.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+        return 'Request timed out. Check your network connection.';
+      case DioExceptionType.connectionError:
+        return 'Cannot reach the server at ${AppConstants.apiBaseUrl}. '
+            'Start the backend (npm start in backend/) and verify devLanHost in '
+            'lib/core/config/api_config.dart matches your PC IP.';
+      case DioExceptionType.badResponse:
+        final code = error.response?.statusCode;
+        if (code == 401) return 'Invalid email or password.';
+        if (code == 409) return 'Email already registered.';
+        return 'Server error (${code ?? 'unknown'}).';
+      default:
+        return error.message ?? 'Network request failed.';
+    }
+  }
 }

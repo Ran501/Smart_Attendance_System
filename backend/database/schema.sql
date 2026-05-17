@@ -89,7 +89,10 @@ CREATE TABLE attendance_sessions (
     started_at TIMESTAMPTZ DEFAULT NOW(),
     ends_at TIMESTAMPTZ NOT NULL,
     closed_at TIMESTAMPTZ,
-    qr_payload TEXT
+    qr_payload TEXT,
+    host_latitude DOUBLE PRECISION,
+    host_longitude DOUBLE PRECISION,
+    radius_meters INTEGER DEFAULT 100
 );
 
 CREATE INDEX idx_sessions_status ON attendance_sessions(status);

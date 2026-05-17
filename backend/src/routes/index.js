@@ -20,10 +20,11 @@ router.post(
 router.post(
   '/auth/register',
   [
-    body('email').isEmail(),
+    body('email').isEmail().normalizeEmail(),
     body('password').isLength({ min: 8 }),
-    body('fullName').notEmpty(),
+    body('fullName').trim().notEmpty(),
     body('role').isIn(['student', 'teacher', 'admin']),
+    body('studentId').optional({ values: 'falsy' }).trim(),
   ],
   validate,
   authController.register,
@@ -45,6 +46,15 @@ router.post(
   '/sessions',
   authenticate,
   authorize('teacher', 'admin'),
+  [
+    body('classId').notEmpty(),
+    body('subjectId').notEmpty(),
+    body('classroomId').notEmpty(),
+    body('latitude').isFloat({ min: -90, max: 90 }),
+    body('longitude').isFloat({ min: -180, max: 180 }),
+    body('radiusMeters').optional().isInt({ min: 1, max: 500 }),
+  ],
+  validate,
   sessionController.createSession,
 );
 router.get(
@@ -53,7 +63,25 @@ router.get(
   authorize('teacher', 'admin'),
   sessionController.getActiveSessions,
 );
+router.get(
+  '/sessions/student/active',
+  authenticate,
+  authorize('student'),
+  sessionController.getStudentActiveSessions,
+);
 router.get('/sessions/:sessionId', authenticate, sessionController.getSession);
+router.patch(
+  '/sessions/:sessionId/location',
+  authenticate,
+  authorize('teacher', 'admin'),
+  [
+    body('latitude').isFloat({ min: -90, max: 90 }),
+    body('longitude').isFloat({ min: -180, max: 180 }),
+    body('accuracy').optional().isFloat({ min: 0 }),
+  ],
+  validate,
+  sessionController.updateSessionLocation,
+);
 router.post(
   '/sessions/:sessionId/close',
   authenticate,

@@ -4,7 +4,6 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-import '../../../../core/constants/app_constants.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/device_service.dart';
 import '../../../../services/face_embedding_service.dart';
@@ -42,39 +41,43 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
     super.initState();
     _challenges = _liveness.generateChallengeSequence();
     _liveness.startChallenge(_challenges.first);
-    _instruction = 'Follow the liveness prompts';
+    _instruction = 'Step 1: Look at the camera and tap Verify';
     _initCamera();
     _embedding.initialize();
   }
 
   Future<void> _initCamera() async {
-    final cameras = await availableCameras();
-    final front = cameras.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.front,
-      orElse: () => cameras.first,
-    );
-    _camera = CameraController(front, ResolutionPreset.medium, enableAudio: false);
-    await _camera!.initialize();
-    _camera!.startImageStream(_processFrame);
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _processFrame(CameraImage image) async {
-    if (_livenessComplete || _submitting) return;
-    // Stream processing simplified: use periodic capture for liveness
+    try {
+      final cameras = await availableCameras();
+      final front = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+      _camera = CameraController(
+        front,
+        ResolutionPreset.low,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+      await _camera!.initialize();
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) {
+        setState(() => _instruction = 'Camera error: $e');
+      }
+    }
   }
 
   Future<void> _runLivenessStep() async {
     if (_camera == null || !_camera!.value.isInitialized) return;
     setState(() => _submitting = true);
     try {
-      await _camera!.stopImageStream();
       final file = await _camera!.takePicture();
       final inputImage = InputImage.fromFilePath(file.path);
       final faces = await _embedding.detectFaces(inputImage);
 
       if (faces.isEmpty) {
-        setState(() => _instruction = 'No face detected');
+        setState(() => _instruction = 'No face detected — try again');
         return;
       }
 
@@ -88,16 +91,19 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         if (_challengeIndex < _challenges.length - 1) {
           _challengeIndex++;
           _liveness.startChallenge(_challenges[_challengeIndex]);
+          setState(() {
+            _progress = 0;
+            _instruction = 'Next: ${_challenges[_challengeIndex].name}';
+          });
         } else {
           setState(() => _livenessComplete = true);
           await _submitAttendance(await File(file.path).readAsBytes(), faces.first);
         }
       }
+    } catch (e) {
+      setState(() => _instruction = 'Capture failed: $e');
     } finally {
       if (mounted) setState(() => _submitting = false);
-      if (_camera != null && _camera!.value.isInitialized && !_livenessComplete) {
-        _camera!.startImageStream(_processFrame);
-      }
     }
   }
 
@@ -109,34 +115,76 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
 
     try {
       final session = widget.sessionData['session'] as Map<String, dynamic>? ?? {};
-      final position = await _geo.getCurrentPosition();
+      final position = await _geo.getBestPosition();
+      if (position == null) {
+        _showResult(false, 'Could not get your location. Enable GPS and try outdoors or near a window.');
+        return;
+      }
+
+      // Bind this phone to the account if not already registered
+      try {
+        await _device.verifyDevice();
+      } catch (e) {
+        _showResult(
+          false,
+          'Device verification failed. Re-register your face on this phone.\n$e',
+        );
+        return;
+      }
+
       final wifi = await _wifi.getWifiInfo();
       final deviceId = await _device.getDeviceId();
       final fingerprint = await _device.getDeviceFingerprint();
 
-      final geoOk = _geo.isInsideRadius(
-        studentLat: position.latitude,
-        studentLon: position.longitude,
-        centerLat: (session['latitude'] as num?)?.toDouble() ?? 0,
-        centerLon: (session['longitude'] as num?)?.toDouble() ?? 0,
-        radiusMeters: (session['radius_meters'] as num?)?.toDouble() ?? 30,
-      );
+      final usesHost = session['uses_host_location'] == true ||
+          session['host_latitude'] != null;
+      final baseRadius =
+          (session['radius_meters'] as num?)?.toDouble();
+      final centerLat = (session['latitude'] as num?)?.toDouble() ??
+          (session['host_latitude'] as num?)?.toDouble();
+      final centerLon = (session['longitude'] as num?)?.toDouble() ??
+          (session['host_longitude'] as num?)?.toDouble();
+      final hostAccuracy = (session['host_accuracy'] as num?)?.toDouble();
 
-      if (!geoOk) {
-        _showResult(false, 'Outside classroom geo-fence');
+      if (centerLat == null || centerLon == null) {
+        _showResult(false, 'Session location missing. Ask teacher to restart the session.');
         return;
       }
 
-      final wifiOk = _wifi.validateWifi(
-        currentSsid: wifi.ssid,
-        currentBssid: wifi.bssid,
-        allowedSsid: session['allowed_wifi_ssid'] as String?,
-        allowedBssid: session['allowed_wifi_bssid'] as String?,
+      final proximity = _geo.checkHostProximity(
+        studentLat: position.latitude,
+        studentLon: position.longitude,
+        hostLat: centerLat,
+        hostLon: centerLon,
+        baseRadius: baseRadius,
+        hostAccuracy: hostAccuracy,
+        studentAccuracy: position.accuracy,
       );
 
-      if (!wifiOk) {
-        _showResult(false, 'Not connected to campus WiFi');
+      if (!proximity.valid) {
+        _showResult(
+          false,
+          usesHost
+              ? 'GPS shows ${proximity.distanceMeters.toStringAsFixed(0)}m from teacher '
+                  '(allowed ~${proximity.allowedRadiusMeters.toStringAsFixed(0)}m). '
+                  'Stand closer together and try again.'
+              : 'Outside classroom geo-fence',
+        );
         return;
+      }
+
+      if (!usesHost) {
+        final wifiOk = _wifi.validateWifi(
+          currentSsid: wifi.ssid,
+          currentBssid: wifi.bssid,
+          allowedSsid: session['allowed_wifi_ssid'] as String?,
+          allowedBssid: session['allowed_wifi_bssid'] as String?,
+        );
+
+        if (!wifiOk) {
+          _showResult(false, 'Not connected to campus WiFi');
+          return;
+        }
       }
 
       final embedding = await _embedding.generateEmbedding(
@@ -156,18 +204,32 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         'deviceFingerprint': fingerprint,
         'livenessPassed': true,
         'livenessScore': 1.0,
+        'locationAccuracy': position.accuracy,
       });
 
+      final accepted = result['accepted'] == true;
+      final message = accepted
+          ? (result['message'] as String? ?? 'Attendance recorded')
+          : (result['reason'] as String? ??
+              result['message'] as String? ??
+              'Attendance rejected');
+
       _showResult(
-        result['accepted'] == true,
-        result['message'] as String? ?? result['reason'] as String? ?? 'Done',
+        accepted,
+        message,
         confidence: (result['confidence'] as num?)?.toDouble(),
       );
     } catch (e) {
-      _showResult(false, e.toString());
+      _showResult(false, _friendlyError(e));
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  String _friendlyError(Object e) {
+    final text = e.toString();
+    if (text.startsWith('Exception: ')) return text.substring('Exception: '.length);
+    return text;
   }
 
   void _showResult(bool success, String message, {double? confidence}) {
@@ -175,7 +237,11 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
-        icon: Icon(success ? Icons.check_circle : Icons.error, color: success ? Colors.green : Colors.red, size: 48),
+        icon: Icon(
+          success ? Icons.check_circle : Icons.error,
+          color: success ? Colors.green : Colors.red,
+          size: 48,
+        ),
         title: Text(success ? 'Attendance Marked' : 'Attendance Rejected'),
         content: Text(
           confidence != null
@@ -195,9 +261,20 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
     );
   }
 
+  Future<void> _releaseCamera() async {
+    final camera = _camera;
+    _camera = null;
+    if (camera != null) {
+      if (camera.value.isStreamingImages) {
+        await camera.stopImageStream();
+      }
+      await camera.dispose();
+    }
+  }
+
   @override
   void dispose() {
-    _camera?.dispose();
+    _releaseCamera();
     _embedding.dispose();
     super.dispose();
   }
@@ -218,17 +295,29 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
             child: Column(
               children: [
                 if (!_livenessComplete) ...[
-                  LinearProgressIndicator(value: (_challengeIndex + _progress) / _challenges.length),
+                  LinearProgressIndicator(
+                    value: (_challengeIndex + _progress) / _challenges.length,
+                  ),
                   const SizedBox(height: 12),
-                  Text(_instruction, style: Theme.of(context).textTheme.titleMedium, textAlign: TextAlign.center),
+                  Text(
+                    _instruction,
+                    style: Theme.of(context).textTheme.titleMedium,
+                    textAlign: TextAlign.center,
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     'Step ${_challengeIndex + 1}/${_challenges.length}: ${_challenges[_challengeIndex].name}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Two quick steps: smile, then a slight head turn — tap Verify for each',
+                    style: Theme.of(context).textTheme.bodySmall,
+                    textAlign: TextAlign.center,
+                  ),
                   const SizedBox(height: 16),
                   AppButton(
-                    label: 'Verify Liveness Step',
+                    label: 'Verify Step',
                     loading: _submitting,
                     onPressed: _runLivenessStep,
                   ),
@@ -236,7 +325,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
                   const CircularProgressIndicator(),
                 const SizedBox(height: 8),
                 Text(
-                  'Threshold: ${(AppConstants.faceMatchThreshold * 100).toInt()}% • Geo + WiFi + Device',
+                  'Geo (${(widget.sessionData['session'] as Map?)?['radius_meters'] ?? 100}m) • Face • Device',
                   style: Theme.of(context).textTheme.bodySmall,
                   textAlign: TextAlign.center,
                 ),

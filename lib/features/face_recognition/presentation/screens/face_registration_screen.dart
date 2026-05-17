@@ -104,7 +104,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Face registered successfully')),
         );
-        context.pop();
+        context.go('/student');
       }
     } catch (e) {
       if (mounted) {

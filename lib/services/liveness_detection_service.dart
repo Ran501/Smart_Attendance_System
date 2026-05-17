@@ -18,11 +18,13 @@ class LivenessDetectionService {
   bool _wasEyesClosed = false;
 
   LivenessChallenge get currentChallenge =>
-      _currentChallenge ?? LivenessChallenge.blinkTwice;
+      _currentChallenge ?? LivenessChallenge.smile;
 
+  /// Attendance flow: no blink — smile + one head turn (works with a single photo per step).
   List<LivenessChallenge> generateChallengeSequence() {
-    final challenges = LivenessChallenge.values.toList()..shuffle(Random());
-    return challenges.take(3).toList();
+    final turns = [LivenessChallenge.turnHeadLeft, LivenessChallenge.turnHeadRight];
+    turns.shuffle(Random());
+    return [LivenessChallenge.smile, turns.first];
   }
 
   void startChallenge(LivenessChallenge challenge) {
@@ -80,29 +82,31 @@ class LivenessDetectionService {
   }) {
     final yaw = face.headEulerAngleY ?? 0;
     if (isLeft) {
-      if (yaw > 15) _leftTurnDone = true;
+      if (yaw > 10) _leftTurnDone = true;
       return (
-        progress: _leftTurnDone ? 1.0 : (yaw / 15).clamp(0.0, 1.0),
+        progress: _leftTurnDone ? 1.0 : (yaw / 10).clamp(0.0, 1.0),
         completed: _leftTurnDone,
-        instruction: _leftTurnDone ? 'Left turn verified!' : 'Turn your head left',
+        instruction: _leftTurnDone ? 'Left turn verified!' : 'Turn your head slightly left',
       );
     } else {
-      if (yaw < -15) _rightTurnDone = true;
+      if (yaw < -10) _rightTurnDone = true;
       return (
-        progress: _rightTurnDone ? 1.0 : (-yaw / 15).clamp(0.0, 1.0),
+        progress: _rightTurnDone ? 1.0 : (-yaw / 10).clamp(0.0, 1.0),
         completed: _rightTurnDone,
-        instruction: _rightTurnDone ? 'Right turn verified!' : 'Turn your head right',
+        instruction: _rightTurnDone ? 'Right turn verified!' : 'Turn your head slightly right',
       );
     }
   }
 
   ({double progress, bool completed, String instruction}) _processSmile(Face face) {
-    final smile = face.smilingProbability ?? 0;
-    if (smile > 0.7) _smileDone = true;
+    final smileProb = face.smilingProbability;
+    final smile = smileProb ?? 0;
+    // Lenient for a single still capture when ML Kit omits smile score.
+    if (smileProb == null || smile > 0.5) _smileDone = true;
     return (
-      progress: smile.clamp(0.0, 1.0),
+      progress: _smileDone ? 1.0 : smile.clamp(0.0, 1.0),
       completed: _smileDone,
-      instruction: _smileDone ? 'Smile verified!' : 'Please smile',
+      instruction: _smileDone ? 'Face captured!' : 'Look at the camera and smile',
     );
   }
 
