@@ -31,14 +31,16 @@ class GeoFenceService {
       }
       return true;
     } else if (status.isDenied) {
-      ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Location permission is required for attendance verification',
+      if (navigatorKey.currentContext != null) {
+        ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Location permission is required for attendance verification',
+            ),
+            backgroundColor: Colors.orange,
           ),
-          backgroundColor: Colors.orange,
-        ),
-      );
+        );
+      }
       return false;
     } else if (status.isPermanentlyDenied) {
       openAppSettings();
@@ -53,27 +55,29 @@ class GeoFenceService {
   }
 
   // Get current position with retry logic
-  Future<Position?> getCurrentPosition({int retries = 3}) async {
+  Future<Position> getCurrentPosition({int retries = 3}) async {
     for (int i = 0; i < retries; i++) {
       try {
         // Check permissions first
         if (!await requestLocationPermission()) {
-          return null;
+          throw Exception('Location permission denied');
         }
 
         // Check if location services are enabled
         if (!await isLocationServiceEnabled()) {
-          ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
-            const SnackBar(
-              content: Text('Please enable location services'),
-              backgroundColor: Colors.orange,
-              action: SnackBarAction(
-                label: 'Open Settings',
-                onPressed: Geolocator.openLocationSettings,
+          if (navigatorKey.currentContext != null) {
+            ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
+              const SnackBar(
+                content: Text('Please enable location services'),
+                backgroundColor: Colors.orange,
+                action: SnackBarAction(
+                  label: 'Open Settings',
+                  onPressed: Geolocator.openLocationSettings,
+                ),
               ),
-            ),
-          );
-          return null;
+            );
+          }
+          throw Exception('Location services disabled');
         }
 
         // Get position with timeout
@@ -86,11 +90,11 @@ class GeoFenceService {
         return position;
       } catch (e) {
         debugPrint('Error getting location (attempt ${i + 1}): $e');
-        if (i == retries - 1) return null;
+        if (i == retries - 1) rethrow;
         await Future.delayed(Duration(seconds: i + 1));
       }
     }
-    return null;
+    throw Exception('Failed to get location after $retries attempts');
   }
 
   // Calculate distance between two coordinates
@@ -98,18 +102,27 @@ class GeoFenceService {
     return Geolocator.distanceBetween(lat1, lon1, lat2, lon2);
   }
 
+  // NEW METHOD: Check if a point is inside a radius (for classroom geofence)
+  bool isInsideRadius({
+    required double studentLat,
+    required double studentLon,
+    required double centerLat,
+    required double centerLon,
+    required double radiusMeters,
+  }) {
+    final distance = calculateDistance(
+      studentLat,
+      studentLon,
+      centerLat,
+      centerLon,
+    );
+    return distance <= radiusMeters;
+  }
+
   // Check if user is within campus geofence
   Future<Map<String, dynamic>> isWithinCampus() async {
     try {
       final position = await getCurrentPosition();
-
-      if (position == null) {
-        return {
-          'withinCampus': false,
-          'error': 'Could not get your location',
-          'distance': null,
-        };
-      }
 
       final distance = calculateDistance(
         position.latitude,
@@ -139,7 +152,7 @@ class GeoFenceService {
     }
   }
 
-  // Validate location for attendance
+  // Validate location for attendance (campus-wide check)
   Future<bool> validateLocationForAttendance() async {
     try {
       // First check if location services are enabled
@@ -155,10 +168,17 @@ class GeoFenceService {
       }
 
       // Get location with loading indicator
-      _showLoadingDialog('Verifying your location...');
+      if (navigatorKey.currentContext != null) {
+        _showLoadingDialog('Verifying your location...');
+      }
 
       final campusCheck = await isWithinCampus();
-      Navigator.of(navigatorKey.currentContext!).pop(); // Close loading dialog
+
+      if (navigatorKey.currentContext != null) {
+        Navigator.of(
+          navigatorKey.currentContext!,
+        ).pop(); // Close loading dialog
+      }
 
       if (campusCheck['error'] != null) {
         _showErrorDialog(campusCheck['error']);
@@ -216,6 +236,8 @@ class GeoFenceService {
   }
 
   void _showLoadingDialog(String message) {
+    if (navigatorKey.currentContext == null) return;
+
     showDialog(
       context: navigatorKey.currentContext!,
       barrierDismissible: false,
@@ -233,6 +255,8 @@ class GeoFenceService {
   }
 
   void _showErrorDialog(String message) {
+    if (navigatorKey.currentContext == null) return;
+
     ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
       SnackBar(
         content: Text(message),
@@ -248,6 +272,8 @@ class GeoFenceService {
   }
 
   void _showSuccessDialog(String message) {
+    if (navigatorKey.currentContext == null) return;
+
     ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
       SnackBar(
         content: Text(message),

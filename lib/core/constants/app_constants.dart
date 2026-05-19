@@ -2,7 +2,8 @@ class AppConstants {
   static const String appName = 'Smart Attendance';
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.236.218.36:3000/api/v1',
+    defaultValue:
+        'https://smartattendancesystem-production-5b56.up.railway.app/api/v1',
   );
   static const double faceMatchThreshold = 0.85;
   static const int defaultSessionDurationMinutes = 5;

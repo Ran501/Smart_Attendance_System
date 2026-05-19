@@ -22,7 +22,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
   final List<({String angleType, List<double> embedding})> _captured = [];
   int _currentAngle = 0;
   bool _processing = false;
-  bool _allCaptured = false; // ✅ NEW: explicit flag for all captured
+  bool _allCaptured = false; //
   String? _status;
 
   @override
@@ -201,13 +201,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                   : const Center(child: CircularProgressIndicator()),
             ),
 
-            // ✅ FIX: bottom panel with explicit padding to clear nav bar
+            //
             Container(
               color: Theme.of(context).scaffoldBackgroundColor,
               padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + bottomInset),
               child: Column(
-                mainAxisSize:
-                    MainAxisSize.min, // ✅ FIX: don't take more than needed
+                mainAxisSize: MainAxisSize.min, //
                 children: [
                   // Progress bar
                   ClipRRect(
