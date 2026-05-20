@@ -102,7 +102,7 @@ async function verifyEmbedding(req, res) {
   // FIX: threshold — 0.85 was too strict for real-world lighting variation.
   // 0.65 is a reasonable starting point for MobileFaceNet with cosine similarity.
   // Tune upward (stricter) once you confirm matches are working.
-  const THRESHOLD = parseFloat(process.env.FACE_SIMILARITY_THRESHOLD ?? '0.65');
+  const THRESHOLD = parseFloat(process.env.FACE_SIMILARITY_THRESHOLD ?? '0.50');
 
   const match = findBestMatch(embedding, storedEmbeddings, THRESHOLD);
 

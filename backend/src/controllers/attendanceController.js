@@ -200,7 +200,7 @@ async function submitAttendance(req, res) {
     if (sim > bestSimilarity) bestSimilarity = sim;
   }
 
-  const threshold = config.faceMatchThreshold ?? 0.65;
+  const threshold = config.faceMatchThreshold ?? 0.50;
   console.log(`Best similarity: ${bestSimilarity.toFixed(4)}`);
   console.log(`Threshold: ${threshold}`);
   console.log(`Result: ${bestSimilarity >= threshold ? '✅ MATCH' : '❌ NO MATCH'}`);
