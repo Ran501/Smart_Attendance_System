@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../core/constants/app_constants.dart';
+import '../core/config/api_config.dart';
 
 class ApiClient {
   ApiClient._();
@@ -9,7 +10,7 @@ class ApiClient {
   final _storage = const FlutterSecureStorage();
   late final Dio dio = Dio(
     BaseOptions(
-      baseUrl: AppConstants.apiBaseUrl,
+      baseUrl: ApiConfig.baseUrl,
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(seconds: 30),
       headers: {'Content-Type': 'application/json'},
@@ -66,7 +67,7 @@ class ApiClient {
       case DioExceptionType.receiveTimeout:
         return 'Request timed out. Check your network connection.';
       case DioExceptionType.connectionError:
-        return 'Cannot reach the server at ${AppConstants.apiBaseUrl}. '
+        return 'Cannot reach the server at ${ApiConfig.baseUrl}. '
             'Start the backend (npm start in backend/) and verify devLanHost in '
             'lib/core/config/api_config.dart matches your PC IP.';
       case DioExceptionType.badResponse:

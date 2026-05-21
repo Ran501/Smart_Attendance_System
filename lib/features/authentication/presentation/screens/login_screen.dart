@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../../core/constants/app_constants.dart';
+import '../../../../core/config/api_config.dart';
 import '../../../../core/providers/auth_provider.dart';
 import '../../../../models/user_model.dart';
 import '../../../../widgets/app_button.dart';
@@ -210,7 +210,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
                 const SizedBox(height: 24),
                 Text(
-                  'Server: ${AppConstants.apiBaseUrl}',
+                  'Server: ${ApiConfig.baseUrl}',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.outline,
                       ),

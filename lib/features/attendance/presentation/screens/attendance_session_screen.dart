@@ -4,11 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
-import '../../../../core/constants/app_constants.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/geo_fence_service.dart';
 import '../../../../services/report_service.dart';
 import '../../../../widgets/session_timer.dart';
+import '../../../../core/config/api_config.dart';
 
 class AttendanceSessionScreen extends StatefulWidget {
   final String sessionId;
@@ -83,7 +83,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   }
 
   void _connectSocket() {
-    final baseUrl = AppConstants.apiBaseUrl.replaceAll('/api/v1', '');
+    final baseUrl = ApiConfig.baseUrl.replaceAll('/api/v1', '');
     _socket = io.io(baseUrl, io.OptionBuilder().setTransports(['websocket']).build());
     _socket!.connect();
     _socket!.emit('join:session', widget.sessionId);

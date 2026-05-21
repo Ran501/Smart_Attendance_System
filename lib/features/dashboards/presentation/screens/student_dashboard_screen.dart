@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
-import '../../../../core/constants/app_constants.dart';
+import '../../../../core/config/api_config.dart';
 import '../../../../core/providers/auth_provider.dart';
 import '../../../../core/providers/theme_provider.dart';
 import '../../../../services/attendance_service.dart';
@@ -67,7 +67,7 @@ class _StudentDashboardScreenState
   }
 
   void _connectSocket() {
-    final baseUrl = AppConstants.apiBaseUrl.replaceAll('/api/v1', '');
+    final baseUrl = ApiConfig.baseUrl.replaceAll('/api/v1', '');
     _socket = io.io(baseUrl, io.OptionBuilder().setTransports(['websocket']).build());
     _socket!.connect();
     _socket!.on('session:started', (_) => _loadActiveSessions());
