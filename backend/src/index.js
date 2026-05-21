@@ -44,6 +44,12 @@ io.on('connection', (socket) => {
   socket.on('leave:session', (sessionId) => {
     socket.leave(`session:${sessionId}`);
   });
+  socket.on('join:class', (classId) => {
+    if (classId) socket.join(`class:${classId}`);
+  });
+  socket.on('leave:class', (classId) => {
+    if (classId) socket.leave(`class:${classId}`);
+  });
 });
 
 server.listen(config.port, () => {

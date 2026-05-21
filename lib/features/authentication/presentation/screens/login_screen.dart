@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/providers/auth_provider.dart';
+import '../../../../models/user_model.dart';
 import '../../../../widgets/app_button.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -19,97 +21,89 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _isLoggingIn = false;
 
   @override
+  void initState() {
+    super.initState();
+    _email.text = 'student@college.edu';
+    _password.text = 'password123';
+  }
+
+  @override
   void dispose() {
     _email.dispose();
     _password.dispose();
     super.dispose();
   }
 
-  Future<void> _login() async {
-    // Prevent multiple login attempts
-    if (_isLoggingIn) return;
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
 
-    // Validate form
+  String _friendlyError(Object error) {
+    final text = error.toString();
+    if (text.startsWith('Exception: ')) {
+      return text.substring('Exception: '.length);
+    }
+    return text;
+  }
+
+  void _navigateForUser(UserModel user) {
+    if (user.isTeacher) {
+      context.go('/teacher');
+    } else if (user.isStudent) {
+      context.go('/student');
+    } else {
+      _showError('Unsupported role: ${user.role}');
+    }
+  }
+
+  Future<void> _login() async {
+    if (_isLoggingIn) return;
     if (!_formKey.currentState!.validate()) return;
 
-    // Clear any previous errors
     ScaffoldMessenger.of(context).clearSnackBars();
-
-    setState(() {
-      _isLoggingIn = true;
-    });
+    setState(() => _isLoggingIn = true);
 
     try {
-      // Attempt login
       await ref
           .read(authStateProvider.notifier)
           .login(_email.text.trim(), _password.text);
 
       if (!mounted) return;
 
-      // Check authentication state after login
       final authState = ref.read(authStateProvider);
-
-      await authState.when(
-        data: (user) async {
-          if (user != null) {
-            // Successful login
-            if (mounted) {
-              // Navigate based on role
-              if (user.isTeacher) {
-                context.go('/teacher');
-              } else {
-                context.go('/student');
-              }
-            }
-          } else {
-            // User is null - login failed silently
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Login failed. Please check your credentials.'),
-                  backgroundColor: Colors.red,
-                  duration: Duration(seconds: 3),
-                ),
-              );
-              setState(() {
-                _isLoggingIn = false;
-              });
-            }
-          }
-        },
-        loading: () {
-          // Still loading, do nothing
-        },
-        error: (error, stackTrace) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Login failed: ${error.toString()}'),
-                backgroundColor: Colors.red,
-                duration: const Duration(seconds: 3),
-              ),
-            );
-            setState(() {
-              _isLoggingIn = false;
-            });
-          }
-        },
-      );
-    } catch (e) {
-      // Catch any unexpected errors
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('An error occurred: ${e.toString()}'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
-        setState(() {
-          _isLoggingIn = false;
-        });
+      if (authState.hasError) {
+        _showError(_friendlyError(authState.error!));
+        return;
       }
+
+      final user = authState.valueOrNull;
+      if (user == null) {
+        _showError('Login failed. Please check your credentials.');
+        return;
+      }
+
+      if (_role == 'teacher' && !user.isTeacher) {
+        _showError('This account is not a teacher. Switch to Student.');
+        await ref.read(authStateProvider.notifier).logout();
+        return;
+      }
+      if (_role == 'student' && !user.isStudent) {
+        _showError('This account is not a student. Switch to Teacher.');
+        await ref.read(authStateProvider.notifier).logout();
+        return;
+      }
+
+      _navigateForUser(user);
+    } catch (e) {
+      if (mounted) _showError(_friendlyError(e));
+    } finally {
+      if (mounted) setState(() => _isLoggingIn = false);
     }
   }
 
@@ -117,42 +111,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
     final isLoading = authState.isLoading || _isLoggingIn;
-
-    // Listen for authentication success
-    ref.listen(authStateProvider, (previous, next) {
-      if (!mounted) return;
-
-      next.whenOrNull(
-        data: (user) {
-          if (user != null && previous?.valueOrNull == null) {
-            // Just logged in successfully
-            if (user.isTeacher) {
-              context.go('/teacher');
-            } else {
-              context.go('/student');
-            }
-          }
-        },
-        error: (error, stackTrace) {
-          // Show error if not already showing
-          if (previous?.isLoading == true) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Login failed: ${error.toString()}'),
-                backgroundColor: Colors.red,
-                duration: const Duration(seconds: 3),
-              ),
-            );
-            // Reset logging in state
-            if (_isLoggingIn) {
-              setState(() {
-                _isLoggingIn = false;
-              });
-            }
-          }
-        },
-      );
-    });
 
     return Scaffold(
       body: SafeArea(
@@ -187,15 +145,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ],
                   selected: {_role},
                   onSelectionChanged: (s) {
-                    setState(() => _role = s.first);
-                    // Optional: Auto-fill demo credentials based on role
-                    if (_role == 'teacher') {
-                      _email.text = 'teacher@college.edu';
-                      _password.text = 'password123';
-                    } else {
-                      _email.text = 'student@college.edu';
-                      _password.text = 'password123';
-                    }
+                    setState(() {
+                      _role = s.first;
+                      if (_role == 'teacher') {
+                        _email.text = 'teacher@college.edu';
+                        _password.text = 'password123';
+                      } else {
+                        _email.text = 'student@college.edu';
+                        _password.text = 'password123';
+                      }
+                    });
                   },
                 ),
                 const SizedBox(height: 24),
@@ -248,6 +207,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 TextButton(
                   onPressed: isLoading ? null : () => context.push('/register'),
                   child: const Text('Create new account'),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Server: ${AppConstants.apiBaseUrl}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                  textAlign: TextAlign.center,
                 ),
               ],
             ),

@@ -19,10 +19,13 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
   CameraController? _camera;
   final _embeddingService = FaceEmbeddingService();
   final _angles = ['front', 'left', 'right', 'up', 'down'];
+
+  // FIX: List<double> non-nullable — we only add after null-check below
   final List<({String angleType, List<double> embedding})> _captured = [];
+
   int _currentAngle = 0;
   bool _processing = false;
-  bool _allCaptured = false; //
+  bool _allCaptured = false;
   String? _status;
 
   @override
@@ -65,10 +68,21 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
         return;
       }
 
+      // FIX: generateEmbedding returns List<double>? — handle null explicitly
       final embedding = await _embeddingService.generateEmbedding(
         bytes,
         faces.first,
       );
+
+      if (embedding == null) {
+        setState(
+          () => _status =
+              'Face model not loaded. Make sure mobile_face_net.tflite is in assets/models/.',
+        );
+        return;
+      }
+
+      // Only add to _captured after confirming embedding is non-null
       _captured.add((angleType: _angles[_currentAngle], embedding: embedding));
 
       if (_currentAngle < _angles.length - 1) {
@@ -104,7 +118,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Face registered successfully')),
         );
-        context.pop();
+        context.go('/student');
       }
     } catch (e) {
       if (mounted) {
@@ -135,7 +149,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
         bottom: true,
         child: Column(
           children: [
-            // Camera preview takes remaining space
             Expanded(
               child: _camera?.value.isInitialized == true
                   ? Stack(
@@ -155,7 +168,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                             ),
                           ),
                         ),
-                        // Angle chips overlay at top of camera
                         Positioned(
                           top: 12,
                           left: 0,
@@ -201,14 +213,14 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                   : const Center(child: CircularProgressIndicator()),
             ),
 
-            //
+            // ✅ FIX: bottom panel with explicit padding to clear nav bar
             Container(
               color: Theme.of(context).scaffoldBackgroundColor,
               padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + bottomInset),
               child: Column(
-                mainAxisSize: MainAxisSize.min, //
+                mainAxisSize:
+                    MainAxisSize.min, // ✅ FIX: don't take more than needed
                 children: [
-                  // Progress bar
                   ClipRRect(
                     borderRadius: BorderRadius.circular(4),
                     child: LinearProgressIndicator(
@@ -223,8 +235,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-
-                  // Current angle label
                   Text(
                     _allCaptured
                         ? 'All ${_angles.length} angles captured ✓'
@@ -233,8 +243,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-
-                  // Status message
                   if (_status != null) ...[
                     const SizedBox(height: 4),
                     Text(
@@ -246,9 +254,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                       ),
                     ),
                   ],
-
                   const SizedBox(height: 12),
-
                   _allCaptured
                       ? AppButton(
                           label: 'Submit Registration',

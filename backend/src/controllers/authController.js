@@ -39,35 +39,76 @@ async function login(req, res) {
 
 async function register(req, res) {
   const { email, password, fullName, role, studentId } = req.body;
-  const existing = await pool.query('SELECT id FROM users WHERE email = $1', [
-    email.toLowerCase(),
-  ]);
-  if (existing.rows.length) {
-    return res.status(409).json({ error: 'Email already registered' });
+  const normalizedEmail = email.toLowerCase().trim();
+  const normalizedStudentId =
+    studentId && String(studentId).trim() ? String(studentId).trim() : null;
+
+  try {
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [
+      normalizedEmail,
+    ]);
+    if (existing.rows.length) {
+      return res.status(409).json({ error: 'Email already registered' });
+    }
+
+    if (normalizedStudentId) {
+      const dupId = await pool.query('SELECT id FROM users WHERE student_id = $1', [
+        normalizedStudentId,
+      ]);
+      if (dupId.rows.length) {
+        return res.status(409).json({ error: 'Student ID already in use' });
+      }
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const result = await pool.query(
+      `INSERT INTO users (email, password_hash, full_name, role, student_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, email, full_name, role, student_id`,
+      [normalizedEmail, passwordHash, fullName, role, normalizedStudentId],
+    );
+    const user = result.rows[0];
+
+    if (role === 'student') {
+      await pool.query(
+        `INSERT INTO class_enrollments (student_id, class_id)
+         VALUES ($1, 'CST-S5-A')
+         ON CONFLICT DO NOTHING`,
+        [user.id],
+      );
+    }
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        studentId: user.student_id,
+      },
+      config.jwt.secret,
+      { expiresIn: config.jwt.expiresIn },
+    );
+
+    await logAudit(user.id, 'REGISTER', 'user', user.id, { role });
+
+    res.status(201).json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.full_name,
+        role: user.role,
+        studentId: user.student_id,
+      },
+    });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({
+        error: 'Email or student ID already registered',
+      });
+    }
+    throw err;
   }
-  const passwordHash = await bcrypt.hash(password, 12);
-  const result = await pool.query(
-    `INSERT INTO users (email, password_hash, full_name, role, student_id)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, email, full_name, role, student_id`,
-    [email.toLowerCase(), passwordHash, fullName, role, studentId || null],
-  );
-  const user = result.rows[0];
-  const token = jwt.sign(
-    { id: user.id, email: user.email, role: user.role, studentId: user.student_id },
-    config.jwt.secret,
-    { expiresIn: config.jwt.expiresIn },
-  );
-  res.status(201).json({
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      fullName: user.full_name,
-      role: user.role,
-      studentId: user.student_id,
-    },
-  });
 }
 
 async function me(req, res) {

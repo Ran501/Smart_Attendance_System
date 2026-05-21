@@ -1,4 +1,3 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../features/authentication/presentation/screens/login_screen.dart';
@@ -13,13 +12,17 @@ import '../../features/dashboards/presentation/screens/teacher_dashboard_screen.
 import '../../features/dashboards/presentation/screens/analytics_screen.dart';
 import '../../features/dashboards/presentation/screens/attendance_history_screen.dart';
 import '../providers/auth_provider.dart';
+import 'go_router_refresh.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
-  final authState = ref.watch(authStateProvider);
+  final refresh = GoRouterRefreshNotifier(ref);
+  ref.onDispose(refresh.dispose);
 
   return GoRouter(
     initialLocation: '/',
+    refreshListenable: refresh,
     redirect: (context, state) {
+      final authState = ref.read(authStateProvider);
       final isLoggedIn = authState.valueOrNull != null;
       final isAuthRoute =
           state.matchedLocation == '/login' ||
@@ -30,7 +33,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (isLoggedIn &&
           (state.matchedLocation == '/login' || state.matchedLocation == '/')) {
         final role = authState.valueOrNull?.role;
-        if (role == 'teacher') return '/teacher';
+        if (role == 'teacher' || role == 'admin') return '/teacher';
         return '/student';
       }
       return null;

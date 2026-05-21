@@ -5,6 +5,8 @@ import '../../../../core/providers/auth_provider.dart';
 import '../../../../models/attendance_session_model.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
+import '../../../../core/constants/app_constants.dart';
+import '../../../../services/geo_fence_service.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../widgets/session_timer.dart';
 
@@ -74,10 +76,29 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
     }
     setState(() => _loading = true);
     try {
+      final position = await GeoFenceService().getBestPosition();
+      if (position == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Enable GPS and wait for a fix before starting (try near a window)',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
       final session = await AttendanceService().createSession(
         classId: _selectedClass!,
         subjectId: _selectedSubject!,
         classroomId: _selectedClassroom!,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+        radiusMeters: AppConstants.hostSessionBaseRadiusMeters.toInt(),
       );
       if (mounted) {
         context.push('/session/${session.id}', extra: session);
@@ -157,10 +178,16 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
                   ),
                   const SizedBox(height: 20),
                   AppButton(
-                    label: 'Start Session (5 min)',
+                    label: 'Start Session (5 min • near you)',
                     icon: Icons.play_arrow,
                     loading: _loading,
                     onPressed: _startSession,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Your GPS anchors the session. Students nearby can mark attendance (GPS buffer applied). '
+                    'Use class "Computer Science S5 A" (CST-S5-A) so enrolled students see it.',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 32),
                   Text('Active Sessions', style: Theme.of(context).textTheme.titleLarge),
