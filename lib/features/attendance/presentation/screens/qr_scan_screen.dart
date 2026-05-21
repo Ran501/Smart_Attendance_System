@@ -31,8 +31,9 @@ class _QrScanScreenState extends State<QrScanScreen> {
   Future<void> _onDetect(BarcodeCapture capture) async {
     if (_scanned || _isLoading) return;
 
-    final barcode = capture.barcodes.firstOrNull;
-    if (barcode?.rawValue == null) return;
+    if (capture.barcodes.isEmpty) return;
+    final barcode = capture.barcodes.first;
+    if (barcode.rawValue == null) return;
 
     setState(() {
       _scanned = true;
@@ -40,7 +41,7 @@ class _QrScanScreenState extends State<QrScanScreen> {
     });
 
     try {
-      final rawValue = barcode!.rawValue!;
+      final rawValue = barcode.rawValue!;
       Map<String, dynamic> data;
 
       // Try to parse JSON

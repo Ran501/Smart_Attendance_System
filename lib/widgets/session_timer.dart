@@ -12,8 +12,9 @@ class SessionTimer extends StatefulWidget {
 }
 
 class _SessionTimerState extends State<SessionTimer> {
-  late Timer _timer;
+  Timer? _timer;
   Duration _remaining = Duration.zero;
+  bool _expiredNotified = false;
 
   @override
   void initState() {
@@ -24,9 +25,14 @@ class _SessionTimerState extends State<SessionTimer> {
 
   void _tick() {
     final rem = widget.endsAt.difference(DateTime.now());
-    if (rem.isNegative) {
-      _timer.cancel();
-      widget.onExpired?.call();
+    if (!mounted) return;
+
+    if (rem.isNegative || rem == Duration.zero) {
+      _timer?.cancel();
+      if (!_expiredNotified) {
+        _expiredNotified = true;
+        widget.onExpired?.call();
+      }
       setState(() => _remaining = Duration.zero);
     } else {
       setState(() => _remaining = rem);
@@ -34,8 +40,19 @@ class _SessionTimerState extends State<SessionTimer> {
   }
 
   @override
+  void didUpdateWidget(covariant SessionTimer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.endsAt != widget.endsAt) {
+      _expiredNotified = false;
+      _timer?.cancel();
+      _tick();
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    }
+  }
+
+  @override
   void dispose() {
-    _timer.cancel();
+    _timer?.cancel();
     super.dispose();
   }
 

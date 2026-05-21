@@ -5,6 +5,22 @@ const { cosineSimilarity } = require('../utils/face');
 const { logAudit, logFraud } = require('../services/auditService');
 const { expireStaleSessions } = require('./sessionController');
 
+const EDITABLE_STATUSES = new Set([
+  'PRESENT',
+  'LATE',
+  'ABSENT',
+  'REJECTED',
+  'MEDICAL_LEAVE',
+  'OFFICIAL_LEAVE',
+]);
+
+function normalizeStatus(value) {
+  const raw = String(value || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  if (raw === 'MEDICAL' || raw === 'ML') return 'MEDICAL_LEAVE';
+  if (raw === 'OFFICIAL' || raw === 'OL') return 'OFFICIAL_LEAVE';
+  return raw;
+}
+
 async function submitAttendance(req, res) {
   await expireStaleSessions();
   const {
@@ -22,8 +38,7 @@ async function submitAttendance(req, res) {
     locationAccuracy,
   } = req.body;
 
-  // ─── FIX: validate embedding immediately — null/missing = fail fast ────────
-  if (!Array.isArray(liveEmbedding) || liveEmbedding.length < 192) {
+  if (!Array.isArray(liveEmbedding) || liveEmbedding.length < 64) {
     console.error('[attendance] REJECTED: liveEmbedding missing or invalid', {
       type: typeof liveEmbedding,
       length: Array.isArray(liveEmbedding) ? liveEmbedding.length : 'N/A',
@@ -37,7 +52,8 @@ async function submitAttendance(req, res) {
   const sessionResult = await pool.query(
     `SELECT s.*, cr.latitude as room_lat, cr.longitude as room_lon,
             cr.radius_meters as room_radius_meters,
-            cr.allowed_wifi_ssid, cr.allowed_wifi_bssid, cr.allowed_subnet
+            cr.allowed_wifi_ssid, cr.allowed_wifi_bssid, cr.allowed_subnet,
+            COALESCE(s.session_units, 1) AS session_units
      FROM attendance_sessions s
      LEFT JOIN classrooms cr ON cr.id = s.classroom_id
      WHERE s.id = $1 AND s.session_token = $2 AND s.status = 'active' AND s.ends_at > NOW()`,
@@ -50,11 +66,19 @@ async function submitAttendance(req, res) {
   const session = sessionResult.rows[0];
 
   const duplicate = await pool.query(
-    `SELECT id FROM attendance_records WHERE session_id = $1 AND student_id = $2`,
+    `SELECT id, status FROM attendance_records WHERE session_id = $1 AND student_id = $2`,
     [sessionId, req.user.id],
   );
-  if (duplicate.rows.length) {
+  if (duplicate.rows.length && duplicate.rows[0].status !== 'REJECTED') {
     return res.status(409).json({ accepted: false, reason: 'Attendance already marked' });
+  }
+
+  const enrolled = await pool.query(
+    `SELECT 1 FROM class_enrollments WHERE class_id = $1 AND student_id = $2`,
+    [session.class_id, req.user.id],
+  );
+  if (!enrolled.rows.length) {
+    return res.status(403).json({ accepted: false, reason: 'You are not enrolled in this module/class' });
   }
 
   const device = await pool.query('SELECT * FROM devices WHERE user_id = $1', [req.user.id]);
@@ -83,13 +107,10 @@ async function submitAttendance(req, res) {
     return res.status(403).json({ accepted: false, reason: 'Device verification failed' });
   }
 
-  const usesHostLocation =
-    session.host_latitude != null && session.host_longitude != null;
+  const usesHostLocation = session.host_latitude != null && session.host_longitude != null;
   const centerLat = usesHostLocation ? session.host_latitude : session.room_lat;
   const centerLon = usesHostLocation ? session.host_longitude : session.room_lon;
-  const baseRadius = usesHostLocation
-    ? session.radius_meters
-    : session.room_radius_meters ?? 30;
+  const baseRadius = usesHostLocation ? session.radius_meters : session.room_radius_meters ?? 30;
 
   let geoValid;
   let distToHost;
@@ -174,7 +195,6 @@ async function submitAttendance(req, res) {
     return res.status(403).json({ accepted: false, reason: 'Liveness verification failed' });
   }
 
-  // ─── FACE MATCHING ────────────────────────────────────────────────────────
   const stored = await pool.query(
     `SELECT id, angle_type, embedding FROM face_embeddings WHERE user_id = $1`,
     [req.user.id],
@@ -183,29 +203,14 @@ async function submitAttendance(req, res) {
     return res.status(400).json({ accepted: false, reason: 'Face not registered' });
   }
 
-  // FIX: add detailed similarity logging so you can see scores in the terminal
-  console.log('\n=== FACE MATCH DEBUG ===');
-  console.log(`User: ${req.user.id}`);
-  console.log(`Live embedding dims: ${liveEmbedding.length}`);
-  console.log(`Live embedding sample: [${liveEmbedding.slice(0, 5).map(v => v.toFixed(4)).join(', ')}]`);
-  console.log(`Stored embeddings: ${stored.rows.length}`);
-
   let bestSimilarity = 0;
   for (const row of stored.rows) {
-    const emb = typeof row.embedding === 'string'
-      ? JSON.parse(row.embedding)
-      : row.embedding;
+    const emb = typeof row.embedding === 'string' ? JSON.parse(row.embedding) : row.embedding;
     const sim = cosineSimilarity(liveEmbedding, emb);
-    console.log(`  [${row.angle_type}] dims: ${emb.length}, similarity: ${sim.toFixed(4)}`);
     if (sim > bestSimilarity) bestSimilarity = sim;
   }
 
   const threshold = config.faceMatchThreshold ?? 0.50;
-  console.log(`Best similarity: ${bestSimilarity.toFixed(4)}`);
-  console.log(`Threshold: ${threshold}`);
-  console.log(`Result: ${bestSimilarity >= threshold ? '✅ MATCH' : '❌ NO MATCH'}`);
-  console.log('========================\n');
-
   if (bestSimilarity < threshold) {
     await logFraud(req.user.id, sessionId, 'FACE_MISMATCH', { confidence: bestSimilarity });
     await recordRejected(session, req.user.id, latitude, longitude, bestSimilarity, {
@@ -227,7 +232,19 @@ async function submitAttendance(req, res) {
     `INSERT INTO attendance_records
      (session_id, class_id, student_id, status, match_confidence, latitude, longitude,
       geo_valid, wifi_valid, device_valid, liveness_passed)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, true, true)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, true, true)
+     ON CONFLICT (session_id, student_id) DO UPDATE SET
+       status = EXCLUDED.status,
+       match_confidence = EXCLUDED.match_confidence,
+       latitude = EXCLUDED.latitude,
+       longitude = EXCLUDED.longitude,
+       geo_valid = EXCLUDED.geo_valid,
+       wifi_valid = EXCLUDED.wifi_valid,
+       device_valid = EXCLUDED.device_valid,
+       liveness_passed = EXCLUDED.liveness_passed,
+       rejection_reason = NULL,
+       manual_note = NULL,
+       updated_at = NOW()`,
     [sessionId, session.class_id, req.user.id, status, bestSimilarity, latitude, longitude],
   );
 
@@ -257,7 +274,18 @@ async function recordRejected(session, studentId, lat, lon, confidence, meta) {
     `INSERT INTO attendance_records
      (session_id, class_id, student_id, status, match_confidence, latitude, longitude,
       geo_valid, wifi_valid, device_valid, liveness_passed, rejection_reason)
-     VALUES ($1, $2, $3, 'REJECTED', $4, $5, $6, $7, $8, $9, $10, $11)`,
+     VALUES ($1, $2, $3, 'REJECTED', $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (session_id, student_id) DO UPDATE SET
+       status = 'REJECTED',
+       match_confidence = EXCLUDED.match_confidence,
+       latitude = EXCLUDED.latitude,
+       longitude = EXCLUDED.longitude,
+       geo_valid = EXCLUDED.geo_valid,
+       wifi_valid = EXCLUDED.wifi_valid,
+       device_valid = EXCLUDED.device_valid,
+       liveness_passed = EXCLUDED.liveness_passed,
+       rejection_reason = EXCLUDED.rejection_reason,
+       updated_at = NOW()`,
     [
       session.id,
       session.class_id,
@@ -276,13 +304,19 @@ async function recordRejected(session, studentId, lat, lon, confidence, meta) {
 
 async function getStudentHistory(req, res) {
   const result = await pool.query(
-    `SELECT ar.*, s.id as session_code, sub.name as subject_name, c.name as class_name
-     FROM attendance_records ar
-     JOIN attendance_sessions s ON s.id = ar.session_id
+    `SELECT COALESCE(ar.id::text, CONCAT(s.id, '-', $1::text)) AS id,
+            s.id as session_id, s.id as session_code, sub.name as subject_name, c.name as class_name,
+            COALESCE(ar.status, 'ABSENT') AS status,
+            ar.match_confidence, ar.rejection_reason,
+            COALESCE(ar.marked_at, s.started_at) AS marked_at,
+            COALESCE(s.session_units, 1) AS session_units
+     FROM attendance_sessions s
      JOIN subjects sub ON sub.id = s.subject_id
-     JOIN classes c ON c.id = ar.class_id
-     WHERE ar.student_id = $1
-     ORDER BY ar.marked_at DESC LIMIT 100`,
+     JOIN classes c ON c.id = s.class_id
+     JOIN class_enrollments ce ON ce.class_id = s.class_id AND ce.student_id = $1
+     LEFT JOIN attendance_records ar ON ar.session_id = s.id AND ar.student_id = $1
+     WHERE s.started_at <= NOW()
+     ORDER BY s.started_at DESC LIMIT 100`,
     [req.user.id],
   );
   res.json(result.rows);
@@ -291,23 +325,133 @@ async function getStudentHistory(req, res) {
 async function getStudentStats(req, res) {
   const result = await pool.query(
     `SELECT
-       COUNT(*) FILTER (WHERE status = 'PRESENT') as present,
-       COUNT(*) FILTER (WHERE status = 'LATE') as late,
-       COUNT(*) FILTER (WHERE status = 'REJECTED') as rejected,
-       COUNT(*) as total
-     FROM attendance_records WHERE student_id = $1`,
+       COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE ar.status = 'PRESENT'), 0)::int as present,
+       COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE ar.status = 'LATE'), 0)::int as late,
+       COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE ar.status = 'REJECTED'), 0)::int as rejected,
+       COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE ar.status = 'MEDICAL_LEAVE'), 0)::int as medical_leave,
+       COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE ar.status = 'OFFICIAL_LEAVE'), 0)::int as official_leave,
+       COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE COALESCE(ar.status, 'ABSENT') = 'ABSENT'), 0)::int as absent,
+       COALESCE(SUM(COALESCE(s.session_units, 1)), 0)::int as total
+     FROM attendance_sessions s
+     JOIN class_enrollments ce ON ce.class_id = s.class_id AND ce.student_id = $1
+     LEFT JOIN attendance_records ar ON ar.session_id = s.id AND ar.student_id = $1
+     WHERE s.started_at <= NOW()`,
     [req.user.id],
   );
   const stats = result.rows[0];
   const total = parseInt(stats.total, 10) || 0;
   const present = parseInt(stats.present, 10) || 0;
+  const absent = parseInt(stats.absent, 10) || 0;
+  const medicalLeave = parseInt(stats.medical_leave, 10) || 0;
+  const officialLeave = parseInt(stats.official_leave, 10) || 0;
+  const absentRulePercentage = total > 0 ? ((total - absent) / total) * 100 : 0;
+  const leaveRulePercentage = total > 0 ? ((total - absent - medicalLeave - officialLeave) / total) * 100 : 0;
   res.json({
     present,
     late: parseInt(stats.late, 10) || 0,
     rejected: parseInt(stats.rejected, 10) || 0,
+    absent,
+    medicalLeave,
+    officialLeave,
     total,
     percentage: total > 0 ? ((present / total) * 100).toFixed(1) : '0.0',
+    absentRulePercentage: absentRulePercentage.toFixed(1),
+    leaveRulePercentage: leaveRulePercentage.toFixed(1),
+    safe: absentRulePercentage >= 90 && leaveRulePercentage >= 80,
   });
 }
 
-module.exports = { submitAttendance, getStudentHistory, getStudentStats };
+async function updateAttendanceStatus(req, res) {
+  const recordId = req.params.recordId || req.body.recordId || req.body.attendanceId;
+  const sessionId = req.params.sessionId || req.body.sessionId || req.body.session_id;
+  const studentId = req.params.studentId || req.body.studentId || req.body.student_id;
+  const status = normalizeStatus(req.body.status || req.body.attendanceStatus || req.body.attendance_status);
+  const note = req.body.note || req.body.remarks || req.body.reason || null;
+
+  if (!EDITABLE_STATUSES.has(status)) {
+    return res.status(400).json({ error: 'Invalid attendance status' });
+  }
+
+  let target;
+  if (recordId) {
+    const existing = await pool.query(
+      `SELECT ar.*, s.teacher_id
+       FROM attendance_records ar
+       JOIN attendance_sessions s ON s.id = ar.session_id
+       WHERE ar.id = $1`,
+      [recordId],
+    );
+    if (!existing.rows.length) return res.status(404).json({ error: 'Attendance record not found' });
+    target = existing.rows[0];
+  } else {
+    if (!sessionId || !studentId) {
+      return res.status(400).json({ error: 'sessionId and studentId are required' });
+    }
+    const session = await pool.query(
+      `SELECT id AS session_id, class_id, teacher_id FROM attendance_sessions WHERE id = $1`,
+      [sessionId],
+    );
+    if (!session.rows.length) return res.status(404).json({ error: 'Session not found' });
+
+    // Flutter may send either the internal user UUID, student ID/CID, or email.
+    const student = await pool.query(
+      `SELECT id FROM users
+       WHERE id::text = $1 OR student_id = $1 OR email = $1
+       LIMIT 1`,
+      [String(studentId)],
+    );
+    if (!student.rows.length) return res.status(404).json({ error: 'Student not found' });
+
+    target = { ...session.rows[0], student_id: student.rows[0].id };
+  }
+
+  if (req.user.role === 'teacher' && target.teacher_id !== req.user.id) {
+    return res.status(403).json({ error: 'You can only edit your own session records' });
+  }
+
+  const updated = await pool.query(
+    `INSERT INTO attendance_records
+     (session_id, class_id, student_id, status, marked_at, manual_note, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, NOW(), $5, $6, NOW())
+     ON CONFLICT (session_id, student_id) DO UPDATE SET
+       status = EXCLUDED.status,
+       manual_note = EXCLUDED.manual_note,
+       updated_by = EXCLUDED.updated_by,
+       updated_at = NOW(),
+       rejection_reason = CASE WHEN EXCLUDED.status = 'REJECTED' THEN attendance_records.rejection_reason ELSE NULL END
+     RETURNING *`,
+    [
+      target.session_id,
+      target.class_id,
+      target.student_id,
+      status,
+      note,
+      req.user.id,
+    ],
+  );
+
+  await logAudit(req.user.id, 'ATTENDANCE_STATUS_UPDATED', 'attendance_record', updated.rows[0].id, {
+    sessionId: target.session_id,
+    studentId: target.student_id,
+    status,
+    note,
+  });
+
+  if (req.io) {
+    req.io.to(`session:${target.session_id}`).emit('attendance:updated', {
+      sessionId: target.session_id,
+      studentId: target.student_id,
+      status,
+      record: updated.rows[0],
+    });
+  }
+
+  res.json({ message: 'Attendance status updated', record: updated.rows[0] });
+}
+
+module.exports = {
+  submitAttendance,
+  getStudentHistory,
+  getStudentStats,
+  updateAttendanceStatus,
+};

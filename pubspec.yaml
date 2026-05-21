@@ -1,5 +1,5 @@
 name: smart_attendence_system
-description: AI-Based Smart Attendance Management System with TFLite facial authentication.
+description: FacePass Bhutan AI-powered smart campus attendance system.
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -37,6 +37,15 @@ dependencies:
   google_fonts: ^6.2.1
   crypto: ^3.0.6
 
+  flutter_blue_plus: ^1.35.5
+  fl_chart: ^0.69.2
+  syncfusion_flutter_charts: ^28.2.9
+  glassmorphism: ^3.0.0
+  lottie: ^3.3.0
+  cached_network_image: ^3.4.1
+  google_sign_in: ^6.2.2
+  printing: ^5.14.2
+  wifi_iot: ^0.3.19+2
 dev_dependencies:
   flutter_test:
     sdk: flutter

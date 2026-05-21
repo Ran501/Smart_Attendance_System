@@ -28,6 +28,7 @@ class AuthNotifier extends AsyncNotifier<UserModel?> {
     required String fullName,
     required String role,
     String? studentId,
+    String? department,
   }) async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
@@ -37,6 +38,7 @@ class AuthNotifier extends AsyncNotifier<UserModel?> {
             fullName: fullName,
             role: role,
             studentId: studentId,
+            department: department,
           );
       return result.user;
     });

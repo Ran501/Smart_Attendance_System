@@ -11,6 +11,8 @@ import '../../features/dashboards/presentation/screens/student_dashboard_screen.
 import '../../features/dashboards/presentation/screens/teacher_dashboard_screen.dart';
 import '../../features/dashboards/presentation/screens/analytics_screen.dart';
 import '../../features/dashboards/presentation/screens/attendance_history_screen.dart';
+import '../../features/dashboards/presentation/screens/module_details_screen.dart';
+import '../../features/dashboards/presentation/screens/teacher_module_screen.dart';
 import '../providers/auth_provider.dart';
 import 'go_router_refresh.dart';
 
@@ -69,8 +71,20 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: '/analytics', builder: (_, __) => const AnalyticsScreen()),
       GoRoute(
+        path: '/teacher-module',
+        builder: (_, state) => TeacherModuleScreen(
+          module: (state.extra as Map<String, dynamic>?) ?? const {},
+        ),
+      ),
+      GoRoute(
         path: '/history',
         builder: (_, __) => const AttendanceHistoryScreen(),
+      ),
+      GoRoute(
+        path: '/module-details',
+        builder: (_, state) => ModuleDetailsScreen(
+          module: (state.extra as Map<String, dynamic>?) ?? const {},
+        ),
       ),
     ],
   );

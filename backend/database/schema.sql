@@ -3,7 +3,7 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TYPE user_role AS ENUM ('student', 'teacher', 'admin');
-CREATE TYPE attendance_status AS ENUM ('PRESENT', 'LATE', 'ABSENT', 'REJECTED');
+CREATE TYPE attendance_status AS ENUM ('PRESENT', 'LATE', 'ABSENT', 'REJECTED', 'MEDICAL_LEAVE', 'OFFICIAL_LEAVE');
 CREATE TYPE session_status AS ENUM ('active', 'expired', 'closed');
 
 CREATE TABLE users (
@@ -32,6 +32,7 @@ CREATE TABLE subjects (
     code VARCHAR(20) NOT NULL,
     class_id VARCHAR(50) REFERENCES classes(id) ON DELETE CASCADE,
     teacher_id UUID REFERENCES users(id),
+    join_password_hash VARCHAR(255),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -86,6 +87,7 @@ CREATE TABLE attendance_sessions (
     session_token VARCHAR(255) UNIQUE NOT NULL,
     status session_status DEFAULT 'active',
     duration_minutes INTEGER DEFAULT 5,
+    session_units INTEGER DEFAULT 1 CHECK (session_units >= 1 AND session_units <= 3),
     started_at TIMESTAMPTZ DEFAULT NOW(),
     ends_at TIMESTAMPTZ NOT NULL,
     closed_at TIMESTAMPTZ,
@@ -112,6 +114,9 @@ CREATE TABLE attendance_records (
     device_valid BOOLEAN,
     liveness_passed BOOLEAN,
     rejection_reason TEXT,
+    manual_note TEXT,
+    updated_by UUID REFERENCES users(id),
+    updated_at TIMESTAMPTZ,
     marked_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(session_id, student_id)
 );

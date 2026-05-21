@@ -29,14 +29,19 @@ class AuthService {
     required String fullName,
     required String role,
     String? studentId,
+    String? department,
   }) async {
     try {
+      // Keep the existing database/API contract. Optional UI fields are sent
+      // only when available so older backends can continue to accept requests.
       final res = await _api.dio.post('/auth/register', data: {
         'email': email,
         'password': password,
         'fullName': fullName,
         'role': role,
-        if (studentId != null) 'studentId': studentId,
+        if (studentId != null && studentId.isNotEmpty) 'studentId': studentId,
+        // Department/profile photo are UI-only until your existing backend adds columns.
+        // They are intentionally not sent to keep the current database contract unchanged.
       });
       final token = res.data['token'] as String;
       final user = UserModel.fromJson(res.data['user'] as Map<String, dynamic>);

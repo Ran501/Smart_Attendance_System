@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/providers/auth_provider.dart';
 import '../../../../models/attendance_session_model.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
-import '../../../../core/constants/app_constants.dart';
-import '../../../../services/geo_fence_service.dart';
 import '../../../../widgets/app_button.dart';
-import '../../../../widgets/session_timer.dart';
+import '../../../../widgets/enterprise_shell.dart';
 
 class TeacherDashboardScreen extends ConsumerStatefulWidget {
   const TeacherDashboardScreen({super.key});
@@ -18,13 +18,8 @@ class TeacherDashboardScreen extends ConsumerStatefulWidget {
 }
 
 class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen> {
-  List<AttendanceSessionModel> _sessions = [];
-  List<Map<String, dynamic>> _classes = [];
-  List<Map<String, dynamic>> _subjects = [];
-  List<Map<String, dynamic>> _classrooms = [];
-  String? _selectedClass;
-  String? _selectedSubject;
-  String? _selectedClassroom;
+  List<Map<String, dynamic>> _modules = [];
+  List<AttendanceSessionModel> _activeSessions = [];
   bool _loading = false;
 
   @override
@@ -37,89 +32,69 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
     setState(() => _loading = true);
     try {
       final catalog = CatalogService();
-      final sessions = await AttendanceService().getActiveSessions();
-      final classes = await catalog.getClasses();
+      final results = await Future.wait<dynamic>([
+        catalog.getTeacherModules(),
+        AttendanceService().getActiveSessions(),
+      ]);
       if (mounted) {
         setState(() {
-          _sessions = sessions;
-          _classes = classes;
-          if (_selectedClass == null && classes.isNotEmpty) {
-            _selectedClass = classes.first['id'] as String?;
-          }
+          _modules = (results[0] as List<Map<String, dynamic>>);
+          _activeSessions = (results[1] as List<AttendanceSessionModel>);
         });
-        if (_selectedClass != null) await _loadSubjects();
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _loadSubjects() async {
-    final subjects = await CatalogService().getSubjects(classId: _selectedClass);
-    final classrooms = await CatalogService().getClassrooms(classId: _selectedClass);
-    if (mounted) {
-      setState(() {
-        _subjects = subjects;
-        _classrooms = classrooms;
-        _selectedSubject = subjects.isNotEmpty ? subjects.first['id'] as String? : null;
-        _selectedClassroom = classrooms.isNotEmpty ? classrooms.first['id'] as String? : null;
-      });
-    }
-  }
-
-  Future<void> _startSession() async {
-    if (_selectedClass == null || _selectedSubject == null || _selectedClassroom == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select class, subject, and classroom')),
-      );
-      return;
-    }
-    setState(() => _loading = true);
-    try {
-      final position = await GeoFenceService().getBestPosition();
-      if (position == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Enable GPS and wait for a fix before starting (try near a window)',
-              ),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        return;
-      }
-
-      final session = await AttendanceService().createSession(
-        classId: _selectedClass!,
-        subjectId: _selectedSubject!,
-        classroomId: _selectedClassroom!,
-        latitude: position.latitude,
-        longitude: position.longitude,
-        accuracy: position.accuracy,
-        radiusMeters: AppConstants.hostSessionBaseRadiusMeters.toInt(),
-      );
-      if (mounted) {
-        context.push('/session/${session.id}', extra: session);
-        _load();
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not load modules: $e'), backgroundColor: Colors.red));
       }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  String _moduleId(Map<String, dynamic> module) {
+    return (module['module_id'] ??
+            module['moduleId'] ??
+            module['subject_id'] ??
+            module['subjectId'] ??
+            module['class_id'] ??
+            module['classId'] ??
+            module['id'] ??
+            module['code'] ??
+            '')
+        .toString();
+  }
+
+  String _moduleName(Map<String, dynamic> module) {
+    return (module['module_name'] ?? module['moduleName'] ?? module['subject_name'] ?? module['subjectName'] ?? module['name'] ?? 'Module').toString();
+  }
+
+  String _moduleClassName(Map<String, dynamic> module) {
+    return (module['class_name'] ?? module['className'] ?? module['section'] ?? module['programme'] ?? module['department'] ?? 'Class').toString();
+  }
+
+  int _activeForModule(Map<String, dynamic> module) {
+    final id = _moduleId(module);
+    return _activeSessions.where((s) => s.subjectId == id || s.classId == id || s.subjectName == _moduleName(module)).length;
+  }
+
+  Future<void> _showCreateModuleSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _CreateModuleSheet(onCreated: _load),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final user = ref.watch(authStateProvider).valueOrNull;
+
+    return EnterpriseScaffold(
       appBar: AppBar(
-        title: const Text('Teacher Dashboard'),
+        title: const Text(AppConstants.appName),
         actions: [
-          IconButton(icon: const Icon(Icons.analytics), onPressed: () => context.push('/analytics')),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () async {
@@ -129,82 +104,300 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
           ),
         ],
       ),
-      body: _loading && _sessions.isEmpty
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showCreateModuleSheet,
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Create Module'),
+      ),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 94, 16, 110),
+          children: [
+            _TeacherHero(name: user?.fullName ?? 'Teacher', moduleCount: _modules.length, activeSessions: _activeSessions.length)
+                .animate()
+                .fadeIn(duration: 450.ms)
+                .slideY(begin: 0.04),
+            const SizedBox(height: 20),
+            SectionTitle(
+              title: 'My Modules',
+              trailing: _loading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : null,
+            ),
+            const SizedBox(height: 14),
+            if (_modules.isEmpty)
+              GlassCard(
+                padding: const EdgeInsets.all(22),
+                child: Column(
+                  children: [
+                    Icon(Icons.menu_book_outlined, size: 46, color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(height: 12),
+                    Text('No modules created yet.', style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 8),
+                    Text('Tap the Create Module button to add your first module and generate a join password.', textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyMedium),
+                  ],
+                ),
+              )
+            else
+              ..._modules.map((m) => _TeacherModuleCard(
+                    name: _moduleName(m),
+                    moduleId: _moduleId(m),
+                    className: _moduleClassName(m),
+                    activeSessions: _activeForModule(m),
+                    onTap: () => context.push('/teacher-module', extra: m),
+                  ).animate().fadeIn(duration: 360.ms).slideY(begin: 0.03)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+class _CreateModuleSheet extends StatefulWidget {
+  final Future<void> Function() onCreated;
+
+  const _CreateModuleSheet({required this.onCreated});
+
+  @override
+  State<_CreateModuleSheet> createState() => _CreateModuleSheetState();
+}
+
+class _CreateModuleSheetState extends State<_CreateModuleSheet> {
+  final _moduleNameController = TextEditingController();
+  final _moduleIdController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _classNameController = TextEditingController();
+  final _departmentController = TextEditingController();
+  final _sectionController = TextEditingController();
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _moduleNameController.dispose();
+    _moduleIdController.dispose();
+    _passwordController.dispose();
+    _classNameController.dispose();
+    _departmentController.dispose();
+    _sectionController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_submitting) return;
+    if (_moduleNameController.text.trim().isEmpty ||
+        _moduleIdController.text.trim().isEmpty ||
+        _passwordController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Module name, Module ID, and Password are required')),
+      );
+      return;
+    }
+
+    setState(() => _submitting = true);
+    var created = false;
+    final moduleCode = _moduleIdController.text.trim().toUpperCase();
+
+    try {
+      await CatalogService().createModule(
+        moduleName: _moduleNameController.text,
+        moduleId: _moduleIdController.text,
+        password: _passwordController.text,
+        className: _classNameController.text,
+        department: _departmentController.text,
+        section: _sectionController.text,
+      );
+      created = true;
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      Navigator.of(context).pop();
+      messenger.showSnackBar(
+        SnackBar(content: Text('Module $moduleCode created successfully'), backgroundColor: Colors.green),
+      );
+      await widget.onCreated();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not create module: $e'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted && !created) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.82,
+      minChildSize: 0.54,
+      maxChildSize: 0.94,
+      builder: (_, scrollController) {
+        return GlassCard(
+          radius: 32,
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+          child: ListView(
+            controller: scrollController,
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
                 children: [
-                  Text('Start Attendance Session', style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<String>(
-                    value: _selectedClass,
-                    decoration: const InputDecoration(labelText: 'Class'),
-                    items: _classes
-                        .map((c) => DropdownMenuItem(
-                              value: c['id'] as String,
-                              child: Text(c['name'] as String? ?? c['id'] as String),
-                            ))
-                        .toList(),
-                    onChanged: (v) async {
-                      setState(() => _selectedClass = v);
-                      await _loadSubjects();
-                    },
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Icon(Icons.add_business_outlined, color: Theme.of(context).colorScheme.primary),
                   ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    value: _selectedSubject,
-                    decoration: const InputDecoration(labelText: 'Subject'),
-                    items: _subjects
-                        .map((s) => DropdownMenuItem(
-                              value: s['id'] as String,
-                              child: Text(s['name'] as String? ?? ''),
-                            ))
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedSubject = v),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    value: _selectedClassroom,
-                    decoration: const InputDecoration(labelText: 'Classroom (Geo + WiFi)'),
-                    items: _classrooms
-                        .map((c) => DropdownMenuItem(
-                              value: c['id'] as String,
-                              child: Text(c['name'] as String? ?? 'Room'),
-                            ))
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedClassroom = v),
-                  ),
-                  const SizedBox(height: 20),
-                  AppButton(
-                    label: 'Start Session (5 min • near you)',
-                    icon: Icons.play_arrow,
-                    loading: _loading,
-                    onPressed: _startSession,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Your GPS anchors the session. Students nearby can mark attendance (GPS buffer applied). '
-                    'Use class "Computer Science S5 A" (CST-S5-A) so enrolled students see it.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 32),
-                  Text('Active Sessions', style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  if (_sessions.isEmpty)
-                    const Card(child: ListTile(title: Text('No active sessions'))),
-                  ..._sessions.map((s) => Card(
-                        child: ListTile(
-                          title: Text(s.id),
-                          subtitle: Text('${s.className ?? s.classId} • ${s.subjectName ?? ''}'),
-                          trailing: SessionTimer(endsAt: s.endsAt),
-                          onTap: () => context.push('/session/${s.id}', extra: s),
-                        ),
-                      )),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text('Create Module', style: Theme.of(context).textTheme.headlineSmall)),
+                ],
+              ),
+              const SizedBox(height: 18),
+              TextField(
+                controller: _moduleNameController,
+                decoration: const InputDecoration(labelText: 'Module Name', hintText: 'Data Structures', prefixIcon: Icon(Icons.menu_book_outlined)),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _moduleIdController,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'Module ID', hintText: 'CS101-S5-A', prefixIcon: Icon(Icons.qr_code_2_outlined)),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _passwordController,
+                obscureText: false,
+                decoration: const InputDecoration(labelText: 'Join Password', hintText: 'Give this password only to enrolled students', prefixIcon: Icon(Icons.password_outlined)),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _classNameController,
+                decoration: const InputDecoration(labelText: 'Class / Section Name', hintText: 'CST-S5-A', prefixIcon: Icon(Icons.groups_outlined)),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _departmentController,
+                decoration: const InputDecoration(labelText: 'Department', hintText: 'Information Technology', prefixIcon: Icon(Icons.account_balance_outlined)),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _sectionController,
+                decoration: const InputDecoration(labelText: 'Semester / Section', hintText: 'Semester 5 • Section A', prefixIcon: Icon(Icons.badge_outlined)),
+              ),
+              const SizedBox(height: 18),
+              AppButton(label: 'Create Module', icon: Icons.check_circle_outline, loading: _submitting, onPressed: _submit),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _TeacherHero extends StatelessWidget {
+  final String name;
+  final int moduleCount;
+  final int activeSessions;
+
+  const _TeacherHero({required this.name, required this.moduleCount, required this.activeSessions});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GlassCard(
+      padding: const EdgeInsets.all(22),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(gradient: LinearGradient(colors: [scheme.primary, scheme.secondary]), borderRadius: BorderRadius.circular(24)),
+            child: const Icon(Icons.co_present_outlined, color: Colors.white, size: 34),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Welcome, ${name.split(' ').first}', style: Theme.of(context).textTheme.headlineSmall),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    StatusPill(label: '$moduleCount Modules', icon: Icons.menu_book_outlined, color: const Color(0xFF1E4ED8)),
+                    StatusPill(label: '$activeSessions Active', icon: Icons.sensors, color: const Color(0xFF10B981)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TeacherModuleCard extends StatelessWidget {
+  final String name;
+  final String moduleId;
+  final String className;
+  final int activeSessions;
+  final VoidCallback onTap;
+
+  const _TeacherModuleCard({
+    required this.name,
+    required this.moduleId,
+    required this.className,
+    required this.activeSessions,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: GlassCard(
+        onTap: onTap,
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(13),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Icon(Icons.school_outlined, color: Theme.of(context).colorScheme.primary),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name, style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 4),
+                  Text('$moduleId • $className', style: Theme.of(context).textTheme.bodySmall),
+                  if (activeSessions > 0) ...[
+                    const SizedBox(height: 10),
+                    StatusPill(label: '$activeSessions Live', icon: Icons.fiber_manual_record, color: const Color(0xFFEF4444)),
+                  ],
                 ],
               ),
             ),
+            const Icon(Icons.chevron_right_rounded),
+          ],
+        ),
+      ),
     );
   }
 }

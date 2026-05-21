@@ -8,7 +8,8 @@
     "dev": "nodemon src/index.js",
     "db:migrate": "node src/database/migrate.js",
     "db:migrate:host": "node src/database/run-migration.js",
-    "db:seed": "node src/database/seed.js"
+    "db:seed": "node src/database/seed.js",
+    "db:migrate:facepass": "node src/database/run-migration.js 003_facepass_module_flow.sql"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

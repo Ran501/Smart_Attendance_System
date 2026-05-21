@@ -1,14 +1,18 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import '../../../../core/config/api_config.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../services/attendance_service.dart';
+import '../../../../services/bluetooth_validation_service.dart';
 import '../../../../services/geo_fence_service.dart';
 import '../../../../services/report_service.dart';
+import '../../../../widgets/enterprise_shell.dart';
 import '../../../../widgets/session_timer.dart';
-import '../../../../core/config/api_config.dart';
 
 class AttendanceSessionScreen extends StatefulWidget {
   final String sessionId;
@@ -21,11 +25,13 @@ class AttendanceSessionScreen extends StatefulWidget {
 
 class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   Map<String, dynamic>? _session;
-  List<dynamic> _attendance = [];
+  List<Map<String, dynamic>> _attendance = [];
   String? _qrPayload;
   io.Socket? _socket;
   Timer? _locationTimer;
   final _geo = GeoFenceService();
+  final _updating = <String>{};
+  bool _loading = false;
 
   @override
   void initState() {
@@ -37,10 +43,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
 
   void _startLocationRefresh() {
     _refreshTeacherLocation();
-    _locationTimer = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => _refreshTeacherLocation(),
-    );
+    _locationTimer = Timer.periodic(const Duration(seconds: 15), (_) => _refreshTeacherLocation());
   }
 
   Future<void> _refreshTeacherLocation() async {
@@ -68,18 +71,40 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
         try {
           final dynamic e = extra;
           _qrPayload = e.qrPayload as String?;
-          _session = {'ends_at': (e.endsAt as DateTime).toIso8601String()};
+          _session = {
+            'id': e.id,
+            'subject_name': e.subjectName,
+            'class_name': e.className,
+            'ends_at': (e.endsAt as DateTime).toIso8601String(),
+          };
         } catch (_) {}
       }
     }
   }
 
   Future<void> _load() async {
+    setState(() => _loading = true);
     try {
-      final api = AttendanceService();
-      final records = await api.getSessionAttendance(widget.sessionId);
+      final records = await AttendanceService().getSessionRoster(widget.sessionId);
       if (mounted) setState(() => _attendance = records);
-    } catch (_) {}
+    } catch (_) {
+      try {
+        final records = await AttendanceService().getSessionAttendance(widget.sessionId);
+        if (mounted) {
+          setState(() {
+            _attendance = records.map((e) => (e as Map).cast<String, dynamic>()).toList();
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not load session attendance: $e'), backgroundColor: Colors.red),
+          );
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   void _connectSocket() {
@@ -88,6 +113,8 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
     _socket!.connect();
     _socket!.emit('join:session', widget.sessionId);
     _socket!.on('attendance:marked', (_) => _load());
+    _socket!.on('attendance:updated', (_) => _load());
+    _socket!.on('attendance:record-updated', (_) => _load());
   }
 
   @override
@@ -100,37 +127,168 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
 
   Future<void> _export(String type) async {
     final report = ReportService();
-    final records = _attendance.cast<Map<String, dynamic>>();
+    final records = _attendance;
     File? file;
     switch (type) {
       case 'pdf':
-        file = await report.exportPdf(
-          sessionId: widget.sessionId,
-          session: _session ?? {'class_id': widget.sessionId},
-          records: records,
-        );
+        file = await report.exportPdf(sessionId: widget.sessionId, session: _session ?? {'class_id': widget.sessionId}, records: records);
+        break;
       case 'csv':
         file = await report.exportCsv(sessionId: widget.sessionId, records: records);
+        break;
       case 'excel':
         file = await report.exportExcel(sessionId: widget.sessionId, records: records);
+        break;
     }
     if (mounted && file != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Exported to ${file.path}')),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Exported to ${file.path}')));
+    }
+  }
+
+  DateTime _endsAt() {
+    final raw = _session?['ends_at'] ?? _session?['endsAt'];
+    if (raw is String) return DateTime.tryParse(raw) ?? DateTime.now().add(const Duration(minutes: 5));
+    return DateTime.now().add(const Duration(minutes: 5));
+  }
+
+  int _sessionUnits() {
+    final raw = _session?['session_units'] ??
+        _session?['sessionUnits'] ??
+        _session?['period_count'] ??
+        _session?['periodCount'] ??
+        _session?['block_periods'] ??
+        _session?['blockPeriods'];
+    if (raw is num) return raw.toInt().clamp(1, 3).toInt();
+    final parsed = int.tryParse(raw?.toString() ?? '');
+    return (parsed ?? 1).clamp(1, 3).toInt();
+  }
+
+  String _statusOf(Map<String, dynamic> record) {
+    final raw = (record['status'] ?? record['attendance_status'] ?? record['attendanceStatus'] ?? '').toString().trim().toUpperCase();
+    if (raw.isEmpty || raw == 'NULL') return 'ABSENT';
+    if (raw == 'MEDICAL' || raw == 'MEDICAL LEAVE' || raw == 'ML') return 'MEDICAL_LEAVE';
+    if (raw == 'OFFICIAL' || raw == 'OFFICIAL LEAVE' || raw == 'OL') return 'OFFICIAL_LEAVE';
+    return raw;
+  }
+
+  String _labelOf(String status) {
+    switch (status) {
+      case 'PRESENT':
+        return 'Present';
+      case 'MEDICAL_LEAVE':
+        return 'Medical Leave';
+      case 'OFFICIAL_LEAVE':
+        return 'Official Leave';
+      case 'REJECTED':
+        return 'Rejected';
+      default:
+        return 'Absent';
+    }
+  }
+
+  Color _colorOf(String status) {
+    switch (status) {
+      case 'PRESENT':
+        return const Color(0xFF10B981);
+      case 'MEDICAL_LEAVE':
+        return const Color(0xFF2563EB);
+      case 'OFFICIAL_LEAVE':
+        return const Color(0xFF8B5CF6);
+      case 'REJECTED':
+        return const Color(0xFFF97316);
+      default:
+        return const Color(0xFFEF4444);
+    }
+  }
+
+  IconData _iconOf(String status) {
+    switch (status) {
+      case 'PRESENT':
+        return Icons.check_circle_outline;
+      case 'MEDICAL_LEAVE':
+        return Icons.medical_services_outlined;
+      case 'OFFICIAL_LEAVE':
+        return Icons.verified_outlined;
+      case 'REJECTED':
+        return Icons.gpp_bad_outlined;
+      default:
+        return Icons.cancel_outlined;
+    }
+  }
+
+  int _count(String status) => _attendance.where((r) => _statusOf(r) == status).length;
+  int get _presentCount => _count('PRESENT');
+  int get _absentCount => _attendance.where((r) => _statusOf(r) == 'ABSENT' || _statusOf(r) == '').length;
+  int get _medicalCount => _count('MEDICAL_LEAVE');
+  int get _officialCount => _count('OFFICIAL_LEAVE');
+  int get _rejectedCount => _count('REJECTED');
+
+  String _studentName(Map<String, dynamic> m) {
+    return (m['full_name'] ??
+            m['student_name'] ??
+            m['studentName'] ??
+            m['name'] ??
+            m['user_name'] ??
+            m['email'] ??
+            'Student')
+        .toString();
+  }
+
+  String? _recordId(Map<String, dynamic> m) {
+    return (m['id'] ?? m['attendance_id'] ?? m['attendanceId'] ?? m['record_id'] ?? m['recordId'])?.toString();
+  }
+
+  String? _studentId(Map<String, dynamic> m) {
+    return (m['student_id'] ?? m['studentId'] ?? m['user_id'] ?? m['userId'] ?? m['cid'] ?? m['student_no'])?.toString();
+  }
+
+  String _recordKey(Map<String, dynamic> m) => _recordId(m) ?? _studentId(m) ?? _studentName(m);
+
+  String _confidenceLabel(Map<String, dynamic> m) {
+    final raw = m['match_confidence'] ?? m['face_confidence'] ?? m['confidence'];
+    if (raw is! num) return 'Face confidence not recorded';
+    final value = raw <= 1 ? raw * 100 : raw;
+    return 'Face confidence ${value.toStringAsFixed(0)}%';
+  }
+
+  Future<void> _changeStatus(Map<String, dynamic> record, String status) async {
+    final key = _recordKey(record);
+    setState(() => _updating.add(key));
+    try {
+      await AttendanceService().updateAttendanceStatus(
+        sessionId: widget.sessionId,
+        status: status,
+        recordId: _recordId(record),
+        studentId: _studentId(record),
       );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${_studentName(record)} marked as ${_labelOf(status)}')),
+        );
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not update record: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _updating.remove(key));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final endsAt = _session?['ends_at'] != null
-        ? DateTime.parse(_session!['ends_at'] as String)
-        : DateTime.now().add(const Duration(minutes: 5));
+    final subject = _session?['subject_name'] ?? _session?['subjectName'] ?? 'Live Session';
+    final className = _session?['class_name'] ?? _session?['className'] ?? _session?['class_id'] ?? 'Class';
+    final beaconName = BluetoothValidationService().teacherBeaconName(widget.sessionId);
 
-    return Scaffold(
+    return EnterpriseScaffold(
       appBar: AppBar(
-        title: Text(widget.sessionId),
+        title: const Text(AppConstants.appName),
         actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
           PopupMenuButton<String>(
             onSelected: _export,
             itemBuilder: (_) => const [
@@ -144,47 +302,221 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 94, 16, 32),
           children: [
-            Center(child: SessionTimer(endsAt: endsAt, onExpired: _load)),
-            const SizedBox(height: 24),
-            if (_qrPayload != null)
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  color: Colors.white,
-                  child: QrImageView(
-                    data: _qrPayload!,
-                    version: QrVersions.auto,
-                    size: 220,
+            GlassCard(
+              padding: const EdgeInsets.all(22),
+              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const StatusPill(label: 'SESSION', icon: Icons.fiber_manual_record, color: Color(0xFFEF4444)),
+                      const Spacer(),
+                      SessionTimer(endsAt: _endsAt(), onExpired: _load),
+                    ],
                   ),
+                  const SizedBox(height: 16),
+                  Text(subject.toString(), style: Theme.of(context).textTheme.headlineMedium),
+                  const SizedBox(height: 4),
+                  Text('$className • Session ID: ${widget.sessionId}', style: Theme.of(context).textTheme.bodySmall),
+                  const SizedBox(height: 12),
+                  StatusPill(label: 'Counts as ${_sessionUnits()} session${_sessionUnits() == 1 ? '' : 's'}', icon: Icons.calculate_outlined, color: const Color(0xFF8B5CF6)),
+                  const SizedBox(height: 18),
+                  ResponsiveGrid(
+                    minItemWidth: 135,
+                    childAspectRatio: 1.32,
+                    children: [
+                      MetricTile(label: 'Present', value: '$_presentCount', icon: Icons.check_circle_outline, color: const Color(0xFF10B981)),
+                      MetricTile(label: 'Absent', value: '$_absentCount', icon: Icons.cancel_outlined, color: const Color(0xFFEF4444)),
+                      MetricTile(label: 'Medical', value: '$_medicalCount', icon: Icons.medical_services_outlined, color: const Color(0xFF2563EB)),
+                      MetricTile(label: 'Official', value: '$_officialCount', icon: Icons.verified_outlined, color: const Color(0xFF8B5CF6)),
+                    ],
+                  ),
+                ],
+              ),
+            ).animate().fadeIn(duration: 450.ms).slideY(begin: 0.04),
+            const SizedBox(height: 18),
+            GlassCard(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.bluetooth_connected, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text('Bluetooth Proximity Beacon', style: Theme.of(context).textTheme.titleMedium)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text('Students scan for a BLE beacon near the teacher/classroom before attendance is submitted.', style: Theme.of(context).textTheme.bodySmall),
+                  const SizedBox(height: 12),
+                  SelectableText(beaconName, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 8),
+                  Text('Use this as the advertising name in your Android/iOS BLE peripheral broadcaster. The database/API remains unchanged.', style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            if (_qrPayload != null)
+              GlassCard(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.qr_code_2),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text('QR Backup Attendance', style: Theme.of(context).textTheme.titleMedium)),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24)),
+                        child: QrImageView(data: _qrPayload!, version: QrVersions.auto, size: 220),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            const SizedBox(height: 16),
-            Text(
-              'Keep this screen open — your location refreshes every 15s so nearby students can mark attendance.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium,
+            const SizedBox(height: 22),
+            SectionTitle(
+              title: 'Student Attendance Records',
+              subtitle: 'Tap the status menu to change absent to present, medical leave, or official leave.',
+              trailing: _loading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : StatusPill(label: '${_attendance.length} Students', icon: Icons.groups_outlined, color: const Color(0xFF1E4ED8)),
             ),
-            const SizedBox(height: 24),
-            Text('Live Attendance (${_attendance.length})',
-                style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 8),
-            ..._attendance.map((r) {
-              final m = r as Map<String, dynamic>;
-              return Card(
-                child: ListTile(
-                  leading: Icon(
-                    m['status'] == 'PRESENT' ? Icons.check_circle : Icons.cancel,
-                    color: m['status'] == 'PRESENT' ? Colors.green : Colors.red,
-                  ),
-                  title: Text(m['full_name'] as String? ?? ''),
-                  subtitle: Text(
-                    '${m['status']} • ${((m['match_confidence'] as num? ?? 0) * 100).toStringAsFixed(0)}%',
-                  ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: const [
+                StatusPill(label: 'Present', icon: Icons.check_circle_outline, color: Color(0xFF10B981)),
+                StatusPill(label: 'Medical Leave', icon: Icons.medical_services_outlined, color: Color(0xFF2563EB)),
+                StatusPill(label: 'Official Leave', icon: Icons.verified_outlined, color: Color(0xFF8B5CF6)),
+                StatusPill(label: 'Absent', icon: Icons.cancel_outlined, color: Color(0xFFEF4444)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_attendance.isEmpty)
+              const GlassCard(child: ListTile(leading: Icon(Icons.person_search_outlined), title: Text('Waiting for students or roster records')))
+            else
+              ..._attendance.map((m) => _StudentAttendanceTile(
+                    record: m,
+                    name: _studentName(m),
+                    idText: _studentId(m),
+                    status: _statusOf(m),
+                    confidenceText: _confidenceLabel(m),
+                    updating: _updating.contains(_recordKey(m)),
+                    labelOf: _labelOf,
+                    colorOf: _colorOf,
+                    iconOf: _iconOf,
+                    onChange: (status) => _changeStatus(m, status),
+                  )),
+            if (_rejectedCount > 0) ...[
+              const SizedBox(height: 10),
+              GlassCard(
+                padding: const EdgeInsets.all(14),
+                color: const Color(0xFFF97316).withValues(alpha: 0.10),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning_amber_rounded, color: Color(0xFFF97316)),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text('$_rejectedCount rejected attempts were detected for this session. Review face, BLE, WiFi, and location checks before changing records manually.')),
+                  ],
                 ),
-              );
-            }),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StudentAttendanceTile extends StatelessWidget {
+  final Map<String, dynamic> record;
+  final String name;
+  final String? idText;
+  final String status;
+  final String confidenceText;
+  final bool updating;
+  final String Function(String) labelOf;
+  final Color Function(String) colorOf;
+  final IconData Function(String) iconOf;
+  final ValueChanged<String> onChange;
+
+  const _StudentAttendanceTile({
+    required this.record,
+    required this.name,
+    required this.idText,
+    required this.status,
+    required this.confidenceText,
+    required this.updating,
+    required this.labelOf,
+    required this.colorOf,
+    required this.iconOf,
+    required this.onChange,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = colorOf(status);
+    final markedAt = record['marked_at'] ?? record['markedAt'] ?? record['created_at'];
+    final reason = record['reason'] ?? record['reject_reason'] ?? record['note'];
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GlassCard(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            CircleAvatar(
+              backgroundColor: color.withValues(alpha: 0.12),
+              child: Icon(iconOf(status), color: color),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 3),
+                  Text(
+                    [
+                      if (idText != null && idText!.isNotEmpty) 'ID: $idText',
+                      confidenceText,
+                      if (markedAt != null) 'Time: $markedAt',
+                    ].join(' • '),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (reason != null && reason.toString().trim().isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text('Note: $reason', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: color)),
+                  ],
+                  const SizedBox(height: 8),
+                  StatusPill(label: labelOf(status), icon: iconOf(status), color: color),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            updating
+                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                : PopupMenuButton<String>(
+                    tooltip: 'Change attendance status',
+                    icon: const Icon(Icons.more_vert),
+                    onSelected: onChange,
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'PRESENT', child: ListTile(leading: Icon(Icons.check_circle_outline), title: Text('Mark Present'))),
+                      PopupMenuItem(value: 'ABSENT', child: ListTile(leading: Icon(Icons.cancel_outlined), title: Text('Mark Absent'))),
+                      PopupMenuItem(value: 'MEDICAL_LEAVE', child: ListTile(leading: Icon(Icons.medical_services_outlined), title: Text('Medical Leave'))),
+                      PopupMenuItem(value: 'OFFICIAL_LEAVE', child: ListTile(leading: Icon(Icons.verified_outlined), title: Text('Official Leave'))),
+                    ],
+                  ),
           ],
         ),
       ),
