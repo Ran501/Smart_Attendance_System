@@ -1,28 +1,59 @@
-import 'dart:math';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-import 'package:flutter/foundation.dart';
 
-enum LivenessChallenge { blinkTwice, turnHeadLeft, turnHeadRight, smile }
+enum LivenessChallenge {
+  blinkTwice,
+  turnHeadLeft,
+  turnHeadRight,
+  turnHeadUp,
+  turnHeadDown,
+  smile,
+}
 
 class LivenessDetectionService {
   LivenessChallenge? _currentChallenge;
   int _blinkCount = 0;
   bool _leftTurnDone = false;
   bool _rightTurnDone = false;
+  bool _upTurnDone = false;
+  bool _downTurnDone = false;
   bool _smileDone = false;
   bool _wasEyesClosed = false;
 
+  /// Registration: smile → look up → look down → right → left.
+  static const List<LivenessChallenge> registrationSequence = [
+    LivenessChallenge.smile,
+    LivenessChallenge.turnHeadUp,
+    LivenessChallenge.turnHeadDown,
+    LivenessChallenge.turnHeadRight,
+    LivenessChallenge.turnHeadLeft,
+  ];
+
+  /// Attendance: smile → right → left (no up/down).
+  static const List<LivenessChallenge> attendanceSequence = [
+    LivenessChallenge.smile,
+    LivenessChallenge.turnHeadRight,
+    LivenessChallenge.turnHeadLeft,
+  ];
+
+  static String labelFor(LivenessChallenge challenge) {
+    switch (challenge) {
+      case LivenessChallenge.smile:
+        return 'Smile';
+      case LivenessChallenge.turnHeadUp:
+        return 'Look up';
+      case LivenessChallenge.turnHeadDown:
+        return 'Look down';
+      case LivenessChallenge.turnHeadLeft:
+        return 'Left';
+      case LivenessChallenge.turnHeadRight:
+        return 'Right';
+      case LivenessChallenge.blinkTwice:
+        return 'Blink';
+    }
+  }
+
   LivenessChallenge get currentChallenge =>
       _currentChallenge ?? LivenessChallenge.smile;
-
-  List<LivenessChallenge> generateChallengeSequence() {
-    final turns = [
-      LivenessChallenge.turnHeadLeft,
-      LivenessChallenge.turnHeadRight,
-    ];
-    turns.shuffle(Random());
-    return [LivenessChallenge.smile, turns.first];
-  }
 
   void startChallenge(LivenessChallenge challenge) {
     _currentChallenge = challenge;
@@ -33,6 +64,8 @@ class LivenessDetectionService {
     _blinkCount = 0;
     _leftTurnDone = false;
     _rightTurnDone = false;
+    _upTurnDone = false;
+    _downTurnDone = false;
     _smileDone = false;
     _wasEyesClosed = false;
   }
@@ -47,6 +80,10 @@ class LivenessDetectionService {
         return _processHeadTurn(face, isLeft: true);
       case LivenessChallenge.turnHeadRight:
         return _processHeadTurn(face, isLeft: false);
+      case LivenessChallenge.turnHeadUp:
+        return _processPitch(face, lookUp: true);
+      case LivenessChallenge.turnHeadDown:
+        return _processPitch(face, lookUp: false);
       case LivenessChallenge.smile:
         return _processSmile(face);
       case null:
@@ -70,9 +107,7 @@ class LivenessDetectionService {
     return (
       progress: (_blinkCount / 2).clamp(0.0, 1.0),
       completed: completed,
-      instruction: completed
-          ? 'Blink verified!'
-          : 'Blink twice (${_blinkCount}/2)',
+      instruction: completed ? 'Blink verified!' : 'Blink twice ($_blinkCount/2)',
     );
   }
 
@@ -81,14 +116,7 @@ class LivenessDetectionService {
     required bool isLeft,
   }) {
     final yaw = face.headEulerAngleY ?? 0;
-
-    // ML Kit analyses the raw camera image. The preview is mirrored only for
-    // display, so the yaw sign must use the raw-image direction. This keeps the
-    // liveness step natural: when the app asks for right, turning to your right
-    // completes the right-turn step, and the same for left.
     const threshold = 15.0;
-
-    debugPrint('[Liveness] yaw=$yaw isLeft=$isLeft');
 
     if (isLeft) {
       if (yaw < -threshold) _leftTurnDone = true;
@@ -111,31 +139,45 @@ class LivenessDetectionService {
     }
   }
 
+  ({double progress, bool completed, String instruction}) _processPitch(
+    Face face, {
+    required bool lookUp,
+  }) {
+    final pitch = face.headEulerAngleX ?? 0;
+    const threshold = 12.0;
+
+    if (lookUp) {
+      if (pitch > threshold) _upTurnDone = true;
+      return (
+        progress: _upTurnDone ? 1.0 : (pitch / threshold).clamp(0.0, 1.0),
+        completed: _upTurnDone,
+        instruction: _upTurnDone
+            ? 'Look up verified!'
+            : 'Tilt your head up toward the ceiling',
+      );
+    } else {
+      if (pitch < -threshold) _downTurnDone = true;
+      return (
+        progress: _downTurnDone ? 1.0 : ((-pitch) / threshold).clamp(0.0, 1.0),
+        completed: _downTurnDone,
+        instruction: _downTurnDone
+            ? 'Look down verified!'
+            : 'Tilt your head down slightly',
+      );
+    }
+  }
+
   ({double progress, bool completed, String instruction}) _processSmile(
     Face face,
   ) {
     final smileProb = face.smilingProbability ?? 0.0;
-    // FIX: removed the null-bypass — if smileProb is null we should NOT
-    // auto-pass. Require an actual detected smile.
-    if (smileProb > 0.65) _smileDone = true;
+    if (smileProb > 0.7) _smileDone = true;
     return (
       progress: _smileDone ? 1.0 : smileProb.clamp(0.0, 1.0),
       completed: _smileDone,
       instruction: _smileDone
           ? 'Smile verified!'
-          : 'Please smile at the camera',
+          : 'Please smile clearly at the camera',
     );
-  }
-
-  bool runFullLivenessSequence(
-    List<Face> faces,
-    List<LivenessChallenge> challenges,
-  ) {
-    if (faces.isEmpty) return false;
-    return challenges.every((c) {
-      startChallenge(c);
-      final result = processFrame(faces.first);
-      return result.completed;
-    });
   }
 }

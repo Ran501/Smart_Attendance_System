@@ -26,7 +26,9 @@ class GeoFenceService {
 
   StreamSubscription<Position>? _positionStream;
   bool _isMonitoring = false;
-  Position? _currentPosition; // ✅ FIX: was used but never declared
+  Position? _currentPosition;
+
+  Position? get lastKnownPosition => _currentPosition;
 
   static const double campusLatitude = 28.6139;
   static const double campusLongitude = 77.2090;
@@ -154,8 +156,10 @@ class GeoFenceService {
         }
 
         final position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-          timeLimit: const Duration(seconds: 10),
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 10),
+          ),
         ).timeout(const Duration(seconds: 15));
 
         _currentPosition = position;

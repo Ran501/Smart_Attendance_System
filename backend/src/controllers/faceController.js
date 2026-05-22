@@ -1,13 +1,26 @@
 const pool = require('../database/pool');
 const { logAudit, logFraud } = require('../services/auditService');
-const { findBestMatch } = require('../utils/face');
+const { evaluateFaceMatch } = require('../utils/face');
 
 // ─── REGISTER ────────────────────────────────────────────────────────────────
+
+const REQUIRED_REGISTRATION_ANGLES = ['smile', 'up', 'down', 'right', 'left'];
 
 async function registerEmbeddings(req, res) {
   const { embeddings, deviceId } = req.body;
   if (!embeddings?.length) {
     return res.status(400).json({ error: 'At least one embedding required' });
+  }
+
+  const providedAngles = new Set(
+    embeddings.map((e) => String(e.angleType || '').trim().toLowerCase()),
+  );
+  const missing = REQUIRED_REGISTRATION_ANGLES.filter((a) => !providedAngles.has(a));
+  if (missing.length) {
+    return res.status(400).json({
+      error: `Complete all registration poses. Missing: ${missing.join(', ')}`,
+      requiredAngles: REQUIRED_REGISTRATION_ANGLES,
+    });
   }
 
   // Validate embedding shape before touching the DB
@@ -58,7 +71,13 @@ async function getMyEmbeddings(req, res) {
     `SELECT id, angle_type, registered_at FROM face_embeddings WHERE user_id = $1`,
     [req.user.id],
   );
-  res.json({ registered: result.rows.length > 0, embeddings: result.rows });
+  const count = result.rows.length;
+  res.json({
+    registered: count >= REQUIRED_REGISTRATION_ANGLES.length,
+    count,
+    requiredCount: REQUIRED_REGISTRATION_ANGLES.length,
+    embeddings: result.rows,
+  });
 }
 
 // ─── VERIFY ──────────────────────────────────────────────────────────────────
@@ -99,35 +118,45 @@ async function verifyEmbedding(req, res) {
   console.log(`[verify] live embedding dims: ${embedding.length}`);
   console.log(`[verify] stored embedding dims: ${storedEmbeddings[0].embedding.length}`);
 
-  // FIX: threshold — 0.85 was too strict for real-world lighting variation.
-  // 0.65 is a reasonable starting point for MobileFaceNet with cosine similarity.
-  // Tune upward (stricter) once you confirm matches are working.
-  const THRESHOLD = parseFloat(process.env.FACE_SIMILARITY_THRESHOLD ?? '0.50');
+  const config = require('../config');
+  const threshold = config.faceMatchThreshold;
 
-  const match = findBestMatch(embedding, storedEmbeddings, THRESHOLD);
+  const match = evaluateFaceMatch(embedding, storedEmbeddings, threshold);
 
-  console.log(`[verify] best similarity: ${match.similarity.toFixed(4)}, matched: ${match.matched}`);
+  console.log(
+    `[verify] avg=${match.avgSimilarity.toFixed(4)} min=${match.minSimilarity.toFixed(4)} ` +
+      `max=${match.maxSimilarity.toFixed(4)} matched=${match.matched}`,
+  );
 
   if (!match.matched) {
     await logFraud(req.user.id, sessionId ?? null, 'FACE_MISMATCH', {
-      similarity: match.similarity,
-      threshold: THRESHOLD,
+      similarity: match.avgSimilarity,
+      minSimilarity: match.minSimilarity,
+      threshold,
     });
     return res.status(401).json({
       verified: false,
-      similarity: match.similarity,
-      message: 'Face not recognized',
+      similarity: match.avgSimilarity,
+      minSimilarity: match.minSimilarity,
+      maxSimilarity: match.maxSimilarity,
+      threshold,
+      message:
+        `Face not recognized (avg ${(match.avgSimilarity * 100).toFixed(1)}%, ` +
+        `weakest ${(match.minSimilarity * 100).toFixed(1)}% — need ${(threshold * 100).toFixed(0)}% avg)`,
     });
   }
 
   await logAudit(req.user.id, 'FACE_VERIFIED', 'face_embeddings', match.embeddingId, {
-    similarity: match.similarity,
+    similarity: match.avgSimilarity,
     sessionId,
   });
 
   res.json({
     verified: true,
-    similarity: match.similarity,
+    similarity: match.avgSimilarity,
+    minSimilarity: match.minSimilarity,
+    maxSimilarity: match.maxSimilarity,
+    threshold,
     matchedEmbeddingId: match.embeddingId,
   });
 }

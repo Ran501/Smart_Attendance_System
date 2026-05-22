@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../../core/config/api_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/providers/auth_provider.dart';
 import '../../../../models/user_model.dart';
+import '../../../../services/login_preferences_service.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../widgets/enterprise_shell.dart';
 
@@ -20,16 +20,33 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _loginPrefs = LoginPreferencesService();
   String _role = 'student';
   bool _isLoggingIn = false;
   bool _rememberMe = true;
   bool _hidePassword = true;
+  List<String> _emailSuggestions = [];
+  bool _prefsLoaded = false;
 
   @override
   void initState() {
     super.initState();
-    _email.text = 'student@college.edu';
-    _password.text = 'password123';
+    _loadSavedLogin();
+  }
+
+  Future<void> _loadSavedLogin() async {
+    final saved = await _loginPrefs.loadForLoginForm();
+    final remember = await _loginPrefs.getRememberMe();
+    if (!mounted) return;
+    setState(() {
+      _rememberMe = remember;
+      _emailSuggestions = saved.suggestions;
+      if (saved.email != null && saved.email!.isNotEmpty) {
+        _email.text = saved.email!;
+      }
+      _role = saved.role;
+      _prefsLoaded = true;
+    });
   }
 
   @override
@@ -95,6 +112,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         return;
       }
 
+      await _loginPrefs.saveSuccessfulLogin(
+        email: _email.text.trim(),
+        role: _role,
+        rememberMe: _rememberMe,
+      );
+
       _navigateForUser(user);
     } catch (e) {
       if (mounted) _showError(_friendlyError(e));
@@ -103,19 +126,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
-  void _googleNotReady() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Google Sign-In UI is ready, but your current backend/database auth is still email-password. Add a backend OAuth endpoint before enabling it.'),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
-    final isLoading = authState.isLoading || _isLoggingIn;
-    final scheme = Theme.of(context).colorScheme;
+    final isLoading = authState.isLoading || _isLoggingIn || !_prefsLoaded;
 
     return EnterpriseScaffold(
       safeArea: false,
@@ -136,29 +150,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   rememberMe: _rememberMe,
                   hidePassword: _hidePassword,
                   isLoading: isLoading,
+                  emailSuggestions: _emailSuggestions,
                   onRoleChanged: (role) {
-                    setState(() {
-                      _role = role;
-                      if (_role == 'teacher') {
-                        _email.text = 'teacher@college.edu';
-                      } else {
-                        _email.text = 'student@college.edu';
-                      }
-                      _password.text = 'password123';
-                    });
+                    setState(() => _role = role);
                   },
-                  onRememberChanged: (value) => setState(() => _rememberMe = value),
+                  onRememberChanged: (value) async {
+                    setState(() => _rememberMe = value);
+                    await _loginPrefs.setRememberMe(value);
+                  },
                   onTogglePassword: () => setState(() => _hidePassword = !_hidePassword),
                   onLogin: _login,
-                  onGoogle: _googleNotReady,
                 ).animate().fadeIn(duration: 650.ms).slideY(begin: 0.04);
 
                 if (wide) {
                   return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Expanded(child: brand),
                       const SizedBox(width: 24),
-                      SizedBox(width: 470, child: form),
+                      Flexible(child: form),
                     ],
                   );
                 }
@@ -195,51 +205,16 @@ class _BrandPanel extends StatelessWidget {
                 child: const Icon(Icons.face_retouching_natural, color: Colors.white, size: 30),
               ),
               const SizedBox(width: 14),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(AppConstants.appName, style: Theme.of(context).textTheme.titleLarge),
-                  Text('Bhutan Smart Campus', style: Theme.of(context).textTheme.bodySmall),
-                ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(AppConstants.appName, style: Theme.of(context).textTheme.titleLarge, maxLines: 2, overflow: TextOverflow.ellipsis),
+                    Text('Bhutan Smart Campus', style: Theme.of(context).textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ],
+                ),
               ),
             ],
-          ),
-          SizedBox(height: wide ? 58 : 28),
-          Text(
-            'Secure attendance for modern Bhutanese institutions.',
-            style: Theme.of(context).textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            'Face recognition, BLE proximity, campus WiFi, geo-fencing, and real-time dashboards in one enterprise-ready system.',
-            style: Theme.of(context).textTheme.bodyLarge,
-          ),
-          const SizedBox(height: 28),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: const [
-              StatusPill(label: 'AI FaceNet', icon: Icons.auto_awesome, color: Color(0xFF1E4ED8)),
-              StatusPill(label: 'BLE Ready', icon: Icons.bluetooth, color: Color(0xFF10B981)),
-              StatusPill(label: 'Geo + WiFi', icon: Icons.location_on_outlined, color: Color(0xFFF59E0B)),
-            ],
-          ),
-          const SizedBox(height: 28),
-          GlassCard(
-            padding: const EdgeInsets.all(16),
-            color: scheme.primary.withValues(alpha: 0.10),
-            child: Row(
-              children: [
-                Icon(Icons.verified_user_outlined, color: scheme.primary),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Role-aware login sends teachers to analytics and students to live attendance.',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
-            ),
           ),
         ],
       ),
@@ -255,11 +230,11 @@ class _LoginPanel extends StatelessWidget {
   final bool rememberMe;
   final bool hidePassword;
   final bool isLoading;
+  final List<String> emailSuggestions;
   final ValueChanged<String> onRoleChanged;
   final ValueChanged<bool> onRememberChanged;
   final VoidCallback onTogglePassword;
   final VoidCallback onLogin;
-  final VoidCallback onGoogle;
 
   const _LoginPanel({
     required this.formKey,
@@ -269,11 +244,11 @@ class _LoginPanel extends StatelessWidget {
     required this.rememberMe,
     required this.hidePassword,
     required this.isLoading,
+    required this.emailSuggestions,
     required this.onRoleChanged,
     required this.onRememberChanged,
     required this.onTogglePassword,
     required this.onLogin,
-    required this.onGoogle,
   });
 
   @override
@@ -300,7 +275,10 @@ class _LoginPanel extends StatelessWidget {
             const SizedBox(height: 20),
             TextFormField(
               controller: email,
-              decoration: const InputDecoration(labelText: 'Institution email', prefixIcon: Icon(Icons.mail_outline)),
+              decoration: const InputDecoration(
+                labelText: 'Institution email',
+                prefixIcon: Icon(Icons.mail_outline),
+              ),
               keyboardType: TextInputType.emailAddress,
               enabled: !isLoading,
               validator: (v) {
@@ -309,6 +287,28 @@ class _LoginPanel extends StatelessWidget {
                 return null;
               },
             ),
+            if (rememberMe && emailSuggestions.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Saved on this device',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: emailSuggestions.map((savedEmail) {
+                  return ActionChip(
+                    avatar: const Icon(Icons.person_outline, size: 18),
+                    label: Text(savedEmail),
+                    onPressed: isLoading ? null : () => email.text = savedEmail,
+                  );
+                }).toList(),
+              ),
+            ],
             const SizedBox(height: 14),
             TextFormField(
               controller: password,
@@ -331,30 +331,22 @@ class _LoginPanel extends StatelessWidget {
             const SizedBox(height: 10),
             Row(
               children: [
-                Checkbox(value: rememberMe, onChanged: isLoading ? null : (v) => onRememberChanged(v ?? true)),
-                const Text('Remember me'),
-                const Spacer(),
+                Checkbox(
+                  value: rememberMe,
+                  onChanged: isLoading ? null : (v) => onRememberChanged(v ?? true),
+                ),
+                const Flexible(
+                  child: Text('Remember me on this device'),
+                ),
                 TextButton(onPressed: isLoading ? null : () {}, child: const Text('Forgot?')),
               ],
             ),
             const SizedBox(height: 14),
             AppButton(label: 'Sign In', icon: Icons.arrow_forward_rounded, loading: isLoading, onPressed: onLogin),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: isLoading ? null : onGoogle,
-              icon: const Icon(Icons.g_mobiledata, size: 28),
-              label: const Text('Continue with Google'),
-            ),
             const SizedBox(height: 14),
             TextButton(
               onPressed: isLoading ? null : () => context.push('/register'),
               child: const Text('Create a new account'),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Server: ${ApiConfig.baseUrl}',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.outline),
-              textAlign: TextAlign.center,
             ),
           ],
         ),

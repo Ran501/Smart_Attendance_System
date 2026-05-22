@@ -195,12 +195,17 @@ async function createModule(req, res) {
       [moduleId, moduleName, subjectCodeFrom(moduleId), classId, req.user.id, joinPasswordHash],
     );
 
-    await client.query(
-      `INSERT INTO classrooms (name, class_id, latitude, longitude, radius_meters, allowed_wifi_ssid)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT DO NOTHING`,
-      ['Default Classroom', classId, 27.7172, 85.3240, 100, 'Campus-WiFi'],
+    const existingRoom = await client.query(
+      `SELECT id FROM classrooms WHERE class_id = $1 ORDER BY created_at ASC NULLS LAST LIMIT 1`,
+      [classId],
     );
+    if (!existingRoom.rows.length) {
+      await client.query(
+        `INSERT INTO classrooms (name, class_id, latitude, longitude, radius_meters, allowed_wifi_ssid)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        ['Default Classroom', classId, 27.7172, 85.3240, 100, 'Campus-WiFi'],
+      );
+    }
 
     await client.query('COMMIT');
 

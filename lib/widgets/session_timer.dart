@@ -68,11 +68,14 @@ class _SessionTimerState extends State<SessionTimer> {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
-        expired ? 'SESSION EXPIRED' : '$mins:$secs remaining',
+        expired ? 'Expired' : '$mins:$secs',
         style: TextStyle(
           fontWeight: FontWeight.bold,
+          fontSize: 12,
           color: expired ? Colors.red.shade900 : Colors.green.shade900,
         ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }

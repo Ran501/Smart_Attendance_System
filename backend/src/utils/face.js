@@ -25,15 +25,66 @@ function averageEmbeddings(embeddings) {
   return sum.map((v) => v / embeddings.length);
 }
 
-function findBestMatch(liveEmbedding, storedEmbeddings, threshold) {
-  let best = { similarity: 0, matched: false };
-  for (const stored of storedEmbeddings) {
-    const sim = cosineSimilarity(liveEmbedding, stored.embedding);
-    if (sim > best.similarity) {
-      best = { similarity: sim, matched: sim >= threshold, embeddingId: stored.id };
-    }
+/**
+ * Strict match: average across all enrolled poses must pass, and the weakest
+ * pose must be close to the threshold (stops "one lucky angle" false accepts).
+ */
+function evaluateFaceMatch(liveEmbedding, storedEmbeddings, threshold) {
+  if (!storedEmbeddings?.length) {
+    return {
+      similarity: 0,
+      avgSimilarity: 0,
+      minSimilarity: 0,
+      maxSimilarity: 0,
+      matched: false,
+      embeddingId: null,
+    };
   }
-  return best;
+
+  const scores = storedEmbeddings.map((stored) => ({
+    id: stored.id,
+    similarity: cosineSimilarity(liveEmbedding, stored.embedding),
+  }));
+
+  const values = scores.map((s) => s.similarity);
+  const maxSimilarity = Math.max(...values);
+  const minSimilarity = Math.min(...values);
+  const avgSimilarity =
+    values.reduce((sum, v) => sum + v, 0) / values.length;
+
+  const minRequired = threshold * 0.88;
+  const matched =
+    avgSimilarity >= threshold &&
+    minSimilarity >= minRequired &&
+    maxSimilarity >= threshold;
+
+  const best = scores.reduce((a, b) => (b.similarity > a.similarity ? b : a));
+
+  return {
+    similarity: avgSimilarity,
+    avgSimilarity,
+    minSimilarity,
+    maxSimilarity,
+    matched,
+    embeddingId: best.id,
+  };
 }
 
-module.exports = { cosineSimilarity, averageEmbeddings, findBestMatch };
+/** @deprecated Use evaluateFaceMatch — kept for tests */
+function findBestMatch(liveEmbedding, storedEmbeddings, threshold) {
+  const result = evaluateFaceMatch(liveEmbedding, storedEmbeddings, threshold);
+  return {
+    similarity: result.similarity,
+    matched: result.matched,
+    embeddingId: result.embeddingId,
+    minSimilarity: result.minSimilarity,
+    maxSimilarity: result.maxSimilarity,
+  };
+}
+
+module.exports = {
+  cosineSimilarity,
+  averageEmbeddings,
+  evaluateFaceMatch,
+  findBestMatch,
+};

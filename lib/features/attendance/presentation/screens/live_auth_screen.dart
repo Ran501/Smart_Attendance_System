@@ -11,7 +11,9 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/bluetooth_validation_service.dart';
 import '../../../../services/device_service.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../services/face_embedding_service.dart';
+import '../../../../services/face_registration_service.dart';
 import '../../../../services/geo_fence_service.dart';
 import '../../../../services/liveness_detection_service.dart';
 import '../../../../services/wifi_validation_service.dart';
@@ -32,6 +34,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   Timer? _autoScanTimer;
 
   final _embedding = FaceEmbeddingService();
+  final _faceRegistration = FaceRegistrationService();
   final _liveness = LivenessDetectionService();
   final _geo = GeoFenceService();
   final _device = DeviceService();
@@ -53,7 +56,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   @override
   void initState() {
     super.initState();
-    _challenges = _liveness.generateChallengeSequence();
+    _challenges = List.from(LivenessDetectionService.attendanceSequence);
     if (_challenges.isNotEmpty) {
       _liveness.startChallenge(_challenges.first);
       _instruction = _instructionForChallenge(_challenges.first);
@@ -75,6 +78,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         enableAudio: false,
       );
       await _camera!.initialize();
+      await _camera!.unlockCaptureOrientation();
       _startAutoScanLoop();
       if (mounted) setState(() {});
     } catch (e) {
@@ -139,7 +143,8 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         setState(() {
           _progress = result.progress.clamp(0.0, 1.0).toDouble();
           _instruction = result.instruction;
-          _faceVerified = result.progress > 0.35;
+          // Liveness only — not face identity (that runs at submit).
+          _faceVerified = false;
         });
       }
 
@@ -151,7 +156,6 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         if (mounted) {
           setState(() {
             _progress = 0;
-            _faceVerified = true;
             _instruction = _instructionForChallenge(_challenges[_challengeIndex]);
           });
         }
@@ -162,9 +166,8 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       if (mounted) {
         setState(() {
           _livenessComplete = true;
-          _faceVerified = true;
           _progress = 1;
-          _instruction = 'Live face verified. Submitting attendance...';
+          _instruction = 'Liveness complete. Matching your registered face...';
         });
       }
 
@@ -189,22 +192,17 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         return 'Turn your head to your left — it will capture automatically.';
       case LivenessChallenge.turnHeadRight:
         return 'Turn your head to your right — it will capture automatically.';
+      case LivenessChallenge.turnHeadUp:
+        return 'Look up — registration only.';
+      case LivenessChallenge.turnHeadDown:
+        return 'Look down — registration only.';
       case LivenessChallenge.blinkTwice:
         return 'Blink twice — it will capture automatically.';
     }
   }
 
   String _challengeName(LivenessChallenge challenge) {
-    switch (challenge) {
-      case LivenessChallenge.smile:
-        return 'Smile';
-      case LivenessChallenge.turnHeadLeft:
-        return 'Left turn';
-      case LivenessChallenge.turnHeadRight:
-        return 'Right turn';
-      case LivenessChallenge.blinkTwice:
-        return 'Blink';
-    }
+    return LivenessDetectionService.labelFor(challenge);
   }
 
   bool _boolFromSession(
@@ -283,7 +281,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         return;
       }
 
-      setState(() => _instruction = 'Generating secure face embedding...');
+      setState(() => _instruction = 'Matching face to your registered profile...');
       final embedding = await _embedding.generateEmbedding(
         Uint8List.fromList(bytes),
         face,
@@ -295,6 +293,25 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         );
         return;
       }
+
+      final verify = await _faceRegistration.verifyEmbeddingDetailed(
+        embedding,
+        sessionId: widget.sessionData['sessionId']?.toString(),
+      );
+      if (!verify.verified) {
+        final avg = verify.similarity ?? 0;
+        final min = verify.minSimilarity;
+        final pct = min != null
+            ? ' (avg ${(avg * 100).toStringAsFixed(0)}%, weakest ${(min * 100).toStringAsFixed(0)}% — need ${(AppConstants.faceMatchThreshold * 100).toStringAsFixed(0)}% avg)'
+            : ' (${(avg * 100).toStringAsFixed(0)}% match, need ${(AppConstants.faceMatchThreshold * 100).toStringAsFixed(0)}% or higher)';
+        _showResult(
+          false,
+          'Face does not match your registered profile$pct. '
+          'Only the student who registered can mark attendance.',
+        );
+        return;
+      }
+      setState(() => _faceVerified = true);
 
       final deviceId = await _device.getDeviceId();
       final fingerprint = await _device.getDeviceFingerprint();

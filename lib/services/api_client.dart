@@ -1,6 +1,5 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import '../core/constants/app_constants.dart';
 import '../core/config/api_config.dart';
 
 class ApiClient {
@@ -8,30 +7,32 @@ class ApiClient {
   static final ApiClient instance = ApiClient._();
 
   final _storage = const FlutterSecureStorage();
-  late final Dio dio = Dio(
-    BaseOptions(
-      baseUrl: ApiConfig.baseUrl,
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 30),
-      headers: {'Content-Type': 'application/json'},
-    ),
-  )..interceptors.add(
-      InterceptorsWrapper(
-        onRequest: (options, handler) async {
-          final token = await _storage.read(key: 'auth_token');
-          if (token != null) {
-            options.headers['Authorization'] = 'Bearer $token';
-          }
-          handler.next(options);
-        },
-        onError: (error, handler) {
-          if (error.response?.statusCode == 401) {
-            _storage.delete(key: 'auth_token');
-          }
-          handler.next(error);
-        },
-      ),
-    );
+  late final Dio dio = _buildDio();
+
+  Dio _buildDio() => Dio(
+        BaseOptions(
+          baseUrl: ApiConfig.baseUrl,
+          connectTimeout: const Duration(seconds: 30),
+          receiveTimeout: const Duration(seconds: 30),
+          headers: {'Content-Type': 'application/json'},
+        ),
+      )..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) async {
+              final token = await _storage.read(key: 'auth_token');
+              if (token != null) {
+                options.headers['Authorization'] = 'Bearer $token';
+              }
+              handler.next(options);
+            },
+            onError: (error, handler) {
+              if (error.response?.statusCode == 401) {
+                _storage.delete(key: 'auth_token');
+              }
+              handler.next(error);
+            },
+          ),
+        );
 
   Future<void> saveToken(String token) =>
       _storage.write(key: 'auth_token', value: token);
@@ -67,9 +68,7 @@ class ApiClient {
       case DioExceptionType.receiveTimeout:
         return 'Request timed out. Check your network connection.';
       case DioExceptionType.connectionError:
-        return 'Cannot reach the server at ${ApiConfig.baseUrl}. '
-            'Start the backend (npm start in backend/) and verify devLanHost in '
-            'lib/core/config/api_config.dart matches your PC IP.';
+        return 'Cannot reach the cloud server. Check your internet connection and try again.';
       case DioExceptionType.badResponse:
         final code = error.response?.statusCode;
         if (code == 401) return 'Invalid email or password.';

@@ -105,10 +105,28 @@ class AttendanceService {
   }
 
   Future<List<AttendanceSessionModel>> getActiveSessions() async {
-    final res = await _api.dio.get('/sessions/active');
-    return (res.data as List)
-        .map((e) => AttendanceSessionModel.fromJson(e as Map<String, dynamic>))
-        .toList();
+    try {
+      final res = await _api.dio.get('/sessions/active');
+      final raw = res.data;
+      if (raw is! List) return <AttendanceSessionModel>[];
+      final sessions = <AttendanceSessionModel>[];
+      for (final item in raw) {
+        if (item is! Map) continue;
+        try {
+          sessions.add(
+            AttendanceSessionModel.fromJson(item.cast<String, dynamic>()),
+          );
+        } catch (_) {
+          // Skip malformed rows instead of failing the whole dashboard.
+        }
+      }
+      return sessions;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        return <AttendanceSessionModel>[];
+      }
+      throw Exception(ApiClient.messageFromDio(e));
+    }
   }
 
   Future<Map<String, dynamic>> submitAttendance(Map<String, dynamic> payload) async {

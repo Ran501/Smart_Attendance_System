@@ -21,6 +21,8 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
   List<Map<String, dynamic>> _modules = [];
   List<AttendanceSessionModel> _activeSessions = [];
   bool _loading = false;
+  String? _modulesError;
+  String? _sessionsError;
 
   @override
   void initState() {
@@ -29,25 +31,47 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _modulesError = null;
+      _sessionsError = null;
+    });
+
+    List<Map<String, dynamic>> modules = [];
+    List<AttendanceSessionModel> sessions = [];
+    String? modulesError;
+    String? sessionsError;
+
     try {
-      final catalog = CatalogService();
-      final results = await Future.wait<dynamic>([
-        catalog.getTeacherModules(),
-        AttendanceService().getActiveSessions(),
-      ]);
-      if (mounted) {
-        setState(() {
-          _modules = (results[0] as List<Map<String, dynamic>>);
-          _activeSessions = (results[1] as List<AttendanceSessionModel>);
-        });
-      }
+      modules = await CatalogService().getTeacherModules();
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not load modules: $e'), backgroundColor: Colors.red));
+      modulesError = e.toString().replaceFirst('Exception: ', '');
+    }
+
+    try {
+      sessions = await AttendanceService().getActiveSessions();
+    } catch (e) {
+      sessionsError = e.toString().replaceFirst('Exception: ', '');
+    }
+
+    if (mounted) {
+      setState(() {
+        _modules = modules;
+        _activeSessions = sessions;
+        _modulesError = modulesError;
+        _sessionsError = sessionsError;
+        _loading = false;
+      });
+
+      if (modulesError != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load modules: $modulesError'), backgroundColor: Colors.red),
+        );
+      } else if (sessionsError != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Modules loaded, but active sessions failed: $sessionsError'), backgroundColor: Colors.orange),
+        );
       }
-    } finally {
-      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -89,6 +113,7 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authStateProvider).valueOrNull;
+    final teacherEmail = user?.email ?? '';
 
     return EnterpriseScaffold(
       appBar: AppBar(
@@ -114,26 +139,55 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 94, 16, 110),
           children: [
-            _TeacherHero(name: user?.fullName ?? 'Teacher', moduleCount: _modules.length, activeSessions: _activeSessions.length)
+            _TeacherHero(
+                  name: user?.fullName ?? 'Teacher',
+                  email: teacherEmail,
+                  moduleCount: _modules.length,
+                  activeSessions: _activeSessions.length,
+                )
                 .animate()
                 .fadeIn(duration: 450.ms)
                 .slideY(begin: 0.04),
+            if (_sessionsError != null) ...[
+              const SizedBox(height: 12),
+              GlassCard(
+                padding: const EdgeInsets.all(14),
+                color: Colors.orange.withValues(alpha: 0.10),
+                child: Text('Active sessions could not be refreshed: $_sessionsError'),
+              ),
+            ],
             const SizedBox(height: 20),
             SectionTitle(
               title: 'My Modules',
               trailing: _loading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : null,
             ),
             const SizedBox(height: 14),
-            if (_modules.isEmpty)
+            if (_modulesError != null)
+              GlassCard(
+                padding: const EdgeInsets.all(18),
+                color: Colors.red.withValues(alpha: 0.08),
+                child: Text(_modulesError!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              )
+            else if (_modules.isEmpty)
               GlassCard(
                 padding: const EdgeInsets.all(22),
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Icon(Icons.menu_book_outlined, size: 46, color: Theme.of(context).colorScheme.primary),
                     const SizedBox(height: 12),
-                    Text('No modules created yet.', style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 8),
-                    Text('Tap the Create Module button to add your first module and generate a join password.', textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyMedium),
+                    Text('No modules for this teacher account.', style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Modules are stored in the cloud under the teacher account that created them.\n\n'
+                      'Use the same teacher email on every phone (e.g. teacher@college.edu). '
+                      'A newly registered teacher account starts with an empty list.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    if (teacherEmail.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text('Signed in as: $teacherEmail', style: Theme.of(context).textTheme.labelLarge),
+                    ],
                   ],
                 ),
               )
@@ -306,10 +360,16 @@ class _CreateModuleSheetState extends State<_CreateModuleSheet> {
 
 class _TeacherHero extends StatelessWidget {
   final String name;
+  final String email;
   final int moduleCount;
   final int activeSessions;
 
-  const _TeacherHero({required this.name, required this.moduleCount, required this.activeSessions});
+  const _TeacherHero({
+    required this.name,
+    required this.email,
+    required this.moduleCount,
+    required this.activeSessions,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -329,6 +389,10 @@ class _TeacherHero extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Welcome, ${name.split(' ').first}', style: Theme.of(context).textTheme.headlineSmall),
+                if (email.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(email, style: Theme.of(context).textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
+                ],
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
@@ -384,9 +448,9 @@ class _TeacherModuleCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(name, style: Theme.of(context).textTheme.titleLarge),
+                  Text(name, style: Theme.of(context).textTheme.titleLarge, maxLines: 2, overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 4),
-                  Text('$moduleId • $className', style: Theme.of(context).textTheme.bodySmall),
+                  Text('$moduleId • $className', style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
                   if (activeSessions > 0) ...[
                     const SizedBox(height: 10),
                     StatusPill(label: '$activeSessions Live', icon: Icons.fiber_manual_record, color: const Color(0xFFEF4444)),

@@ -122,8 +122,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   }
 
   void _connectSocket() {
-    final baseUrl = ApiConfig.baseUrl.replaceAll('/api/v1', '');
-    _socket = io.io(baseUrl, io.OptionBuilder().setTransports(['websocket']).build());
+    _socket = io.io(ApiConfig.socketOrigin, io.OptionBuilder().setTransports(['websocket']).build());
     _socket!.connect();
     _socket!.emit('join:session', widget.sessionId);
     _socket!.on('attendance:marked', (_) => _load());

@@ -28,35 +28,42 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
   final _embeddingService = FaceEmbeddingService();
   final _liveness = LivenessDetectionService();
 
-  final List<({
+  static const List<String> _angleTypes = ['smile', 'up', 'down', 'right', 'left'];
+
+  late final List<({
     String angleType,
     String title,
-    String instruction,
     LivenessChallenge challenge,
     IconData icon,
-  })> _steps = const [
-    (
-      angleType: 'front',
-      title: 'Smile',
-      instruction: 'Smile naturally at the camera',
-      challenge: LivenessChallenge.smile,
-      icon: Icons.sentiment_satisfied_alt,
-    ),
-    (
-      angleType: 'left',
-      title: 'Left turn',
-      instruction: 'Turn your head slowly to your left',
-      challenge: LivenessChallenge.turnHeadLeft,
-      icon: Icons.keyboard_double_arrow_left_rounded,
-    ),
-    (
-      angleType: 'right',
-      title: 'Right turn',
-      instruction: 'Turn your head slowly to your right',
-      challenge: LivenessChallenge.turnHeadRight,
-      icon: Icons.keyboard_double_arrow_right_rounded,
-    ),
-  ];
+  })> _steps = List.generate(
+    LivenessDetectionService.registrationSequence.length,
+    (i) {
+      final challenge = LivenessDetectionService.registrationSequence[i];
+      return (
+        angleType: _angleTypes[i],
+        title: LivenessDetectionService.labelFor(challenge),
+        challenge: challenge,
+        icon: _iconFor(challenge),
+      );
+    },
+  );
+
+  static IconData _iconFor(LivenessChallenge c) {
+    switch (c) {
+      case LivenessChallenge.smile:
+        return Icons.sentiment_satisfied_alt;
+      case LivenessChallenge.turnHeadUp:
+        return Icons.keyboard_arrow_up_rounded;
+      case LivenessChallenge.turnHeadDown:
+        return Icons.keyboard_arrow_down_rounded;
+      case LivenessChallenge.turnHeadLeft:
+        return Icons.keyboard_double_arrow_left_rounded;
+      case LivenessChallenge.turnHeadRight:
+        return Icons.keyboard_double_arrow_right_rounded;
+      default:
+        return Icons.face;
+    }
+  }
 
   final List<({String angleType, List<double> embedding})> _captured = [];
 
@@ -89,6 +96,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
       );
 
       await _camera!.initialize();
+      await _camera!.unlockCaptureOrientation();
       _startCurrentStep();
       _startAutoCaptureLoop();
 
@@ -104,7 +112,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
     if (_currentStep >= _steps.length) return;
     _poseProgress = 0;
     _liveness.startChallenge(_steps[_currentStep].challenge);
-    _status = _steps[_currentStep].instruction;
+    _status = _steps[_currentStep].title;
   }
 
   void _startAutoCaptureLoop() {
@@ -129,7 +137,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
 
     setState(() {
       _detecting = true;
-      _status = 'Looking for ${_steps[_currentStep].title.toLowerCase()}...';
+      _status = 'Follow pose: ${_steps[_currentStep].title}...';
     });
 
     XFile? file;
@@ -151,9 +159,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
 
       if (faces.length > 1) {
         if (mounted) {
-          setState(() {
-            _status = 'Only one face should be visible.';
-          });
+          setState(() => _status = 'Only one face should be visible.');
         }
         return;
       }
@@ -197,9 +203,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
             _currentStep++;
             _startCurrentStep();
           });
-        } else {
-          _currentStep++;
-          _startCurrentStep();
         }
       } else {
         _autoCaptureTimer?.cancel();
@@ -207,7 +210,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
           setState(() {
             _allCaptured = true;
             _poseProgress = 1;
-            _status = 'All live face poses captured. Submit to finish.';
+            _status = 'All poses captured. Submit to save your face profile.';
           });
         }
       }
@@ -226,7 +229,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
   Future<void> _submit() async {
     if (_captured.length < _steps.length) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please complete all live face checks')),
+        const SnackBar(
+          content: Text('Complete smile, up, down, right, and left before submitting'),
+        ),
       );
       return;
     }
@@ -237,7 +242,10 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
       await FaceRegistrationService().registerEmbeddings(_captured);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Face registered successfully')),
+          const SnackBar(
+            content: Text('Face profile saved. Only your face can mark attendance.'),
+            backgroundColor: Colors.green,
+          ),
         );
         context.go('/student');
       }
@@ -268,7 +276,20 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
         : ((_currentStep + _poseProgress) / _steps.length).clamp(0.0, 1.0);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Face Registration')),
+      appBar: AppBar(
+        title: const Text('Register Your Face'),
+        bottom: const PreferredSize(
+          preferredSize: Size.fromHeight(36),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Text(
+              'Smile → Up → Down → Right → Left. This profile is linked to your account only.',
+              style: TextStyle(fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      ),
       resizeToAvoidBottomInset: false,
       body: SafeArea(
         bottom: true,
@@ -367,8 +388,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                   const SizedBox(height: 8),
                   Text(
                     _allCaptured
-                        ? 'All ${_steps.length} live checks captured ✓'
-                        : 'Auto ${_steps[_currentStep].title} capture',
+                        ? 'All ${_steps.length} poses captured ✓'
+                        : 'Step ${_currentStep + 1}/${_steps.length}: ${_steps[_currentStep].title}',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
@@ -385,15 +406,13 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                   const SizedBox(height: 12),
                   _allCaptured
                       ? AppButton(
-                          label: 'Submit Registration',
+                          label: 'Save Face Profile',
                           icon: Icons.check_circle,
                           loading: _submitting,
                           onPressed: _submit,
                         )
                       : AppButton(
-                          label: _detecting
-                              ? 'Auto checking...'
-                              : 'Auto capture enabled',
+                          label: _detecting ? 'Checking pose...' : 'Hold still — auto capture',
                           icon: Icons.auto_awesome,
                           loading: _detecting,
                           onPressed: null,

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../../core/config/api_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/providers/auth_provider.dart';
 import '../../../../widgets/app_button.dart';
@@ -21,7 +20,6 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _studentId = TextEditingController();
-  final _department = TextEditingController();
   String _role = 'student';
   bool _isRegistering = false;
   bool _hidePassword = true;
@@ -47,14 +45,12 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
 
     try {
       final studentIdRaw = _studentId.text.trim();
-      final departmentRaw = _department.text.trim();
       await ref.read(authStateProvider.notifier).register(
             email: _email.text.trim(),
             password: _password.text,
             fullName: _name.text.trim(),
             role: _role,
             studentId: studentIdRaw.isNotEmpty ? studentIdRaw : null,
-            department: departmentRaw.isNotEmpty ? departmentRaw : null,
           );
 
       if (!mounted) return;
@@ -93,7 +89,6 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     _email.dispose();
     _password.dispose();
     _studentId.dispose();
-    _department.dispose();
     super.dispose();
   }
 
@@ -135,36 +130,16 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text('Create institution account', style: Theme.of(context).textTheme.headlineSmall),
-                              Text('Register first, then complete AI face enrolment.', style: Theme.of(context).textTheme.bodySmall),
+                              Text(
+                                'Students complete AI face enrolment after sign-up.',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
                             ],
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 24),
-                    Center(
-                      child: Stack(
-                        children: [
-                          CircleAvatar(
-                            radius: 44,
-                            backgroundColor: scheme.primary.withValues(alpha: 0.12),
-                            child: Icon(Icons.person_outline, size: 42, color: scheme.primary),
-                          ),
-                          Positioned(
-                            right: 0,
-                            bottom: 0,
-                            child: CircleAvatar(
-                              radius: 16,
-                              backgroundColor: scheme.secondary,
-                              child: const Icon(Icons.camera_alt_outlined, size: 16, color: Colors.white),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text('Profile photo upload is shown in UI; current backend keeps the same database fields.', textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
-                    const SizedBox(height: 22),
                     SegmentedButton<String>(
                       segments: const [
                         ButtonSegment(value: 'student', label: Text('Student'), icon: Icon(Icons.school_outlined)),
@@ -209,12 +184,6 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                     ),
                     const SizedBox(height: 14),
                     TextFormField(
-                      controller: _department,
-                      enabled: !loading,
-                      decoration: const InputDecoration(labelText: 'Department', hintText: 'Information Technology', prefixIcon: Icon(Icons.apartment_outlined)),
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
                       controller: _password,
                       enabled: !loading,
                       decoration: InputDecoration(
@@ -232,12 +201,6 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                     AppButton(label: 'Create Account', icon: Icons.verified_user_outlined, loading: loading, onPressed: _register),
                     const SizedBox(height: 12),
                     TextButton(onPressed: loading ? null : () => context.go('/login'), child: const Text('Already have an account? Sign in')),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Server: ${ApiConfig.baseUrl}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.outline),
-                      textAlign: TextAlign.center,
-                    ),
                   ],
                 ),
               ),

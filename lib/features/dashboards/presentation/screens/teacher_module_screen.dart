@@ -69,26 +69,37 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
+
+    var sessions = <Map<String, dynamic>>[];
+    var classrooms = <Map<String, dynamic>>[];
+    String? sessionError;
+
     try {
-      final results = await Future.wait<dynamic>([
-        _attendanceService.getModuleSessions(moduleId: _moduleId),
-        CatalogService().getClassrooms(classId: _classId),
-      ]);
-      if (mounted) {
-        setState(() {
-          _sessions = (results[0] as List<Map<String, dynamic>>);
-          _classrooms = (results[1] as List<Map<String, dynamic>>);
-          if (_selectedClassroom == null && _classrooms.isNotEmpty) {
-            _selectedClassroom = (_classrooms.first['id'] ?? _classrooms.first['classroom_id'] ?? _classrooms.first['classroomId'])?.toString();
-          }
-        });
-      }
+      sessions = await _attendanceService.getModuleSessions(moduleId: _moduleId);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not load module: $e'), backgroundColor: Colors.red));
+      sessionError = e.toString().replaceFirst('Exception: ', '');
+    }
+
+    try {
+      classrooms = await CatalogService().getClassrooms(classId: _classId);
+    } catch (_) {
+      classrooms = <Map<String, dynamic>>[];
+    }
+
+    if (mounted) {
+      setState(() {
+        _sessions = sessions;
+        _classrooms = classrooms;
+        if (_selectedClassroom == null && _classrooms.isNotEmpty) {
+          _selectedClassroom = (_classrooms.first['id'] ?? _classrooms.first['classroom_id'] ?? _classrooms.first['classroomId'])?.toString();
+        }
+        _loading = false;
+      });
+      if (sessionError != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load sessions: $sessionError'), backgroundColor: Colors.red),
+        );
       }
-    } finally {
-      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -412,7 +423,7 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
                           children: [
                             Text('Module Analytics', style: Theme.of(context).textTheme.headlineSmall),
                             const SizedBox(height: 3),
-                            Text(_moduleName, style: Theme.of(context).textTheme.bodySmall),
+                            Text(_moduleName, style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
                           ],
                         ),
                       ),

@@ -1,7 +1,7 @@
 const pool = require('../database/pool');
 const config = require('../config');
 const { isInsideGeoFence, checkHostProximity, distanceMeters } = require('../utils/geo');
-const { cosineSimilarity } = require('../utils/face');
+const { evaluateFaceMatch } = require('../utils/face');
 const { logAudit, logFraud } = require('../services/auditService');
 const { expireStaleSessions } = require('./sessionController');
 const { buildStudentModules } = require('./moduleController');
@@ -201,30 +201,46 @@ async function submitAttendance(req, res) {
     [req.user.id],
   );
   if (!stored.rows.length) {
-    return res.status(400).json({ accepted: false, reason: 'Face not registered' });
+    return res.status(400).json({
+      accepted: false,
+      reason: 'Face not registered. Complete smile, up, down, right, and left enrolment first.',
+    });
   }
 
-  let bestSimilarity = 0;
-  for (const row of stored.rows) {
-    const emb = typeof row.embedding === 'string' ? JSON.parse(row.embedding) : row.embedding;
-    const sim = cosineSimilarity(liveEmbedding, emb);
-    if (sim > bestSimilarity) bestSimilarity = sim;
+  if (stored.rows.length < 1) {
+    return res.status(400).json({
+      accepted: false,
+      reason: 'Face not registered. Complete smile, up, down, right, and left enrolment first.',
+    });
   }
 
-  const threshold = config.faceMatchThreshold ?? 0.50;
-  if (bestSimilarity < threshold) {
-    await logFraud(req.user.id, sessionId, 'FACE_MISMATCH', { confidence: bestSimilarity });
-    await recordRejected(session, req.user.id, latitude, longitude, bestSimilarity, {
+  const storedEmbeddings = stored.rows.map((row) => ({
+    id: row.id,
+    embedding:
+      typeof row.embedding === 'string' ? JSON.parse(row.embedding) : row.embedding,
+  }));
+
+  const threshold = config.faceMatchThreshold;
+  const faceMatch = evaluateFaceMatch(liveEmbedding, storedEmbeddings, threshold);
+  if (!faceMatch.matched) {
+    await logFraud(req.user.id, sessionId, 'FACE_MISMATCH', {
+      confidence: faceMatch.avgSimilarity,
+      minSimilarity: faceMatch.minSimilarity,
+    });
+    await recordRejected(session, req.user.id, latitude, longitude, faceMatch.avgSimilarity, {
       geoValid: true,
       wifiValid: true,
       deviceValid: true,
       livenessPassed: true,
-      reason: `Face match below threshold (${(bestSimilarity * 100).toFixed(1)}%)`,
+      reason: `Face match below threshold (avg ${(faceMatch.avgSimilarity * 100).toFixed(1)}%)`,
     });
     return res.status(403).json({
       accepted: false,
-      reason: `Face not recognized (${(bestSimilarity * 100).toFixed(1)}% match, need ${(threshold * 100).toFixed(0)}%)`,
-      confidence: bestSimilarity,
+      reason:
+        `Face not recognized (avg ${(faceMatch.avgSimilarity * 100).toFixed(1)}%, ` +
+        `weakest ${(faceMatch.minSimilarity * 100).toFixed(1)}% — need ${(threshold * 100).toFixed(0)}% avg)`,
+      confidence: faceMatch.avgSimilarity,
+      minSimilarity: faceMatch.minSimilarity,
     });
   }
 
@@ -246,11 +262,19 @@ async function submitAttendance(req, res) {
        rejection_reason = NULL,
        manual_note = NULL,
        updated_at = NOW()`,
-    [sessionId, session.class_id, req.user.id, status, bestSimilarity, latitude, longitude],
+    [
+      sessionId,
+      session.class_id,
+      req.user.id,
+      status,
+      faceMatch.avgSimilarity,
+      latitude,
+      longitude,
+    ],
   );
 
   await logAudit(req.user.id, 'ATTENDANCE_MARKED', 'attendance_record', sessionId, {
-    confidence: bestSimilarity,
+    confidence: faceMatch.avgSimilarity,
   });
 
   if (req.io) {
@@ -258,14 +282,14 @@ async function submitAttendance(req, res) {
       sessionId,
       studentId: req.user.id,
       status,
-      confidence: bestSimilarity,
+      confidence: faceMatch.avgSimilarity,
     });
   }
 
   res.json({
     accepted: true,
     status,
-    confidence: bestSimilarity,
+    confidence: faceMatch.avgSimilarity,
     message: 'Attendance recorded successfully',
   });
 }

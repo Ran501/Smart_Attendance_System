@@ -79,8 +79,7 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
   }
 
   void _connectSocket() {
-    final baseUrl = ApiConfig.baseUrl.replaceAll('/api/v1', '');
-    _socket = io.io(baseUrl, io.OptionBuilder().setTransports(['websocket']).build());
+    _socket = io.io(ApiConfig.socketOrigin, io.OptionBuilder().setTransports(['websocket']).build());
     _socket!.connect();
     _socket!.on('session:started', (_) => _loadActiveSessions());
     _socket!.on('session:closed', (_) => _loadActiveSessions());
@@ -133,9 +132,14 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
   }
 
   Future<void> _markAttendance(Map<String, dynamic> session) async {
-    if (!_faceRegistered) {
+    final registered = await FaceRegistrationService().isFaceRegistered();
+    if (mounted) setState(() => _faceRegistered = registered);
+    if (!registered) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Register your face before marking attendance'), backgroundColor: Colors.orange),
+        const SnackBar(
+          content: Text('Register your face first (smile, up, down, right, left)'),
+          backgroundColor: Colors.orange,
+        ),
       );
       return;
     }
@@ -172,12 +176,6 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
       backgroundColor: Colors.transparent,
       builder: (_) => _JoinModuleSheet(onJoined: _load),
     );
-  }
-
-  double _percentage() {
-    final raw = _stats?['percentage'] ?? _stats?['overallPercentage'] ?? _stats?['attendance_percentage'];
-    if (raw is num) return raw.toDouble();
-    return double.tryParse(raw?.toString() ?? '') ?? 0;
   }
 
   String _greeting() {
@@ -241,7 +239,6 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authStateProvider).valueOrNull;
-    final percentage = _percentage();
     return EnterpriseScaffold(
       appBar: AppBar(
         title: const Text(AppConstants.appName),
@@ -281,9 +278,11 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
               subtitle: user?.studentId ?? user?.email ?? '',
               greeting: _greeting(),
               initial: _initial(user?.fullName),
-              percentage: percentage,
               faceRegistered: _faceRegistered,
-              onFaceRegister: () => context.push('/face-register'),
+              onFaceRegister: () async {
+                await context.push('/face-register');
+                if (mounted) await _load();
+              },
             ).animate().fadeIn(duration: 450.ms).slideY(begin: 0.04),
             const SizedBox(height: 18),
             if (_activeSessions.isNotEmpty)
@@ -447,7 +446,6 @@ class _StudentHero extends StatelessWidget {
   final String subtitle;
   final String greeting;
   final String initial;
-  final double percentage;
   final bool faceRegistered;
   final VoidCallback onFaceRegister;
 
@@ -456,70 +454,100 @@ class _StudentHero extends StatelessWidget {
     required this.subtitle,
     required this.greeting,
     required this.initial,
-    required this.percentage,
     required this.faceRegistered,
     required this.onFaceRegister,
   });
 
   @override
   Widget build(BuildContext context) {
-    final color = percentage >= 90
-        ? const Color(0xFF10B981)
-        : percentage >= 80
-            ? const Color(0xFFF59E0B)
-            : const Color(0xFFEF4444);
+    final scheme = Theme.of(context).colorScheme;
 
-    return GlassCard(
-      padding: const EdgeInsets.all(18),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 28,
-            child: Text(initial, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 20)),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('$greeting, ${name.split(' ').first}', style: Theme.of(context).textTheme.titleLarge),
-                if (subtitle.trim().isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
-                ],
-                if (!faceRegistered) ...[
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    height: 36,
-                    child: AppButton(
-                      label: 'Register Face',
-                      icon: Icons.face,
-                      outlined: true,
-                      onPressed: onFaceRegister,
-                    ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        GlassCard(
+          padding: const EdgeInsets.all(18),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 28,
+                backgroundColor: scheme.primary.withValues(alpha: 0.15),
+                child: Text(
+                  initial,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 20,
+                    color: scheme.primary,
                   ),
-                ],
-              ],
-            ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$greeting, ${name.split(' ').first}',
+                      style: Theme.of(context).textTheme.titleLarge,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (subtitle.trim().isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: Theme.of(context).textTheme.bodySmall,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (faceRegistered)
+                Icon(Icons.verified_user, color: scheme.primary, size: 28),
+            ],
           ),
-          const SizedBox(width: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: color.withValues(alpha: 0.25)),
-            ),
+        ),
+        if (!faceRegistered) ...[
+          const SizedBox(height: 14),
+          GlassCard(
+            padding: const EdgeInsets.all(20),
+            color: scheme.primary.withValues(alpha: 0.08),
+            border: Border.all(color: scheme.primary.withValues(alpha: 0.35)),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('${percentage.toStringAsFixed(0)}%', style: Theme.of(context).textTheme.titleLarge?.copyWith(color: color, fontWeight: FontWeight.w900)),
-                Text('Attendance', style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color)),
+                Row(
+                  children: [
+                    Icon(Icons.face_retouching_natural, color: scheme.primary, size: 36),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Text(
+                        'Register your face to mark attendance',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Complete smile, up, down, right, and left once. Only your face can mark attendance later.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 16),
+                AppButton(
+                  label: 'Register Face Now',
+                  icon: Icons.camera_alt_outlined,
+                  onPressed: onFaceRegister,
+                ),
               ],
             ),
           ),
         ],
-      ),
+      ],
     );
   }
 }
@@ -551,29 +579,31 @@ class _LiveSessionBanner extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Container(width: 12, height: 12, decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle)).animate(onPlay: (c) => c.repeat()).scale(begin: const Offset(0.85, 0.85), end: const Offset(1.25, 1.25), duration: 850.ms).fadeIn(),
-              const SizedBox(width: 10),
-              Expanded(child: Text('Attendance Session Active', style: Theme.of(context).textTheme.titleMedium)),
+              Text('Attendance Session Active', style: Theme.of(context).textTheme.titleMedium),
               SessionTimer(endsAt: _endsAt()),
             ],
           ),
           const SizedBox(height: 10),
-          Text(subject, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
+          Text(subject, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900), maxLines: 2, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 4),
-          Text(teacher, style: Theme.of(context).textTheme.bodySmall),
+          Text(teacher, style: Theme.of(context).textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 14),
-          Row(
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Expanded(
-                child: StatusPill(
-                  label: marked ? 'Already Marked' : within ? 'Inside Range' : 'Move Closer',
-                  icon: marked ? Icons.check_circle : within ? Icons.my_location : Icons.location_off_outlined,
-                  color: marked ? const Color(0xFF10B981) : within ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
-                ),
+              StatusPill(
+                label: marked ? 'Already Marked' : within ? 'Inside Range' : 'Move Closer',
+                icon: marked ? Icons.check_circle : within ? Icons.my_location : Icons.location_off_outlined,
+                color: marked ? const Color(0xFF10B981) : within ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
               ),
-              const SizedBox(width: 12),
               ElevatedButton.icon(
                 onPressed: marked || !within || loading ? null : onMark,
                 icon: const Icon(Icons.face_retouching_natural),
@@ -629,9 +659,9 @@ class _ModuleAttendanceCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(name.toString(), style: Theme.of(context).textTheme.titleLarge),
+                      Text(name.toString(), style: Theme.of(context).textTheme.titleLarge, maxLines: 2, overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 4),
-                      Text(teacher.toString(), style: Theme.of(context).textTheme.bodySmall),
+                      Text(teacher.toString(), style: Theme.of(context).textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
                     ],
                   ),
                 ),

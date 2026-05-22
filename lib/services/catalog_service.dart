@@ -43,20 +43,19 @@ class CatalogService {
   ///
   /// It keeps your existing database/API because it first tries newer module
   /// endpoints, then falls back to the existing subject/class endpoints.
+  /// Modules for the signed-in teacher only (server filters by `teacher_id`).
   Future<List<Map<String, dynamic>>> getTeacherModules() async {
     final attempts = <String>[
       '/modules/teacher',
       '/teacher/modules',
       '/modules',
-      '/subjects',
     ];
 
     DioException? lastError;
     for (final path in attempts) {
       try {
         final res = await _api.dio.get(path);
-        final modules = _mapList(res.data);
-        if (modules.isNotEmpty) return modules;
+        return _mapList(res.data);
       } on DioException catch (e) {
         lastError = e;
         if (e.response?.statusCode != 404 && e.response?.statusCode != 405) {
@@ -65,16 +64,10 @@ class CatalogService {
       }
     }
 
-    // Final fallback: show classes as modules if the existing backend only has
-    // classes. This lets the UI work before the backend module route is added.
-    try {
-      return await getClasses();
-    } on DioException catch (e) {
-      throw Exception(ApiClient.messageFromDio(e));
-    } catch (_) {
-      if (lastError != null) throw Exception(ApiClient.messageFromDio(lastError));
-      return <Map<String, dynamic>>[];
+    if (lastError != null) {
+      throw Exception(ApiClient.messageFromDio(lastError));
     }
+    return <Map<String, dynamic>>[];
   }
 
 
@@ -196,8 +189,21 @@ class CatalogService {
       try {
         final res = await _api.dio.post(path, data: payload);
         final data = res.data;
-        if (data is Map) return data.cast<String, dynamic>();
-        return {'success': true, 'moduleId': normalizedId};
+        final created = data is Map ? data.cast<String, dynamic>() : <String, dynamic>{'moduleId': normalizedId};
+
+        // Confirm the module exists on this server (catches wrong/local DB).
+        final modules = await getTeacherModules();
+        final found = modules.any((m) {
+          final id = (m['moduleId'] ?? m['module_id'] ?? m['id'] ?? m['subject_id'] ?? '').toString().toUpperCase();
+          return id == normalizedId;
+        });
+        if (!found) {
+          throw Exception(
+            'Module was not found after saving. Pull to refresh or sign in again.',
+          );
+        }
+
+        return created;
       } on DioException catch (e) {
         lastError = e;
         if (e.response?.statusCode != 404 && e.response?.statusCode != 405) {

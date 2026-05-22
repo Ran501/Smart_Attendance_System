@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../core/constants/app_constants.dart';
 
 class BleValidationResult {
@@ -49,6 +50,14 @@ class BluetoothValidationService {
     }
 
     try {
+      final permissionsOk = await _ensurePermissions();
+      if (!permissionsOk) {
+        return const BleValidationResult(
+          verified: false,
+          message: 'Bluetooth permissions are required for proximity check',
+        );
+      }
+
       final adapterState = await FlutterBluePlus.adapterState.first;
       if (adapterState != BluetoothAdapterState.on) {
         return const BleValidationResult(
@@ -108,4 +117,11 @@ class BluetoothValidationService {
   }
 
   String teacherBeaconName(String sessionId) => 'FacePass-$sessionId';
+
+  Future<bool> _ensurePermissions() async {
+    final scan = await Permission.bluetoothScan.request();
+    final connect = await Permission.bluetoothConnect.request();
+    final location = await Permission.locationWhenInUse.request();
+    return scan.isGranted && connect.isGranted && location.isGranted;
+  }
 }

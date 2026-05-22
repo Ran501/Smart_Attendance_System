@@ -2,7 +2,11 @@ class AppConstants {
   static const String appName = 'FacePass Bhutan';
   static const String appTagline = 'AI Smart Campus Attendance';
 
-  static const double faceMatchThreshold = 0.85;
+  /// Server uses the same value via FACE_MATCH_THRESHOLD (cosine similarity).
+  static const double faceMatchThreshold = 0.75;
+
+  /// Weakest enrolled pose must reach at least threshold × this (server-side too).
+  static const double faceMatchMinPoseRatio = 0.88;
   static const int defaultSessionDurationMinutes = 5;
 
   /// Existing backend radius is still used. BLE adds an extra proximity signal.
