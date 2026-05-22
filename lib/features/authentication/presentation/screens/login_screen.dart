@@ -211,7 +211,7 @@ class _BrandPanel extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Text(
-            'Face recognition, BLE proximity, campus WiFi, geo-fencing, QR backup, and real-time dashboards in one enterprise-ready system.',
+            'Face recognition, BLE proximity, campus WiFi, geo-fencing, and real-time dashboards in one enterprise-ready system.',
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           const SizedBox(height: 28),

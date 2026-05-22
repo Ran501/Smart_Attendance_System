@@ -51,10 +51,20 @@ router.get('/classrooms', authenticate, analyticsController.getClassrooms);
 router.get('/modules', authenticate, moduleController.listTeacherModules);
 router.get('/modules/teacher', authenticate, authorize('teacher', 'admin'), moduleController.listTeacherModules);
 router.get('/teacher/modules', authenticate, authorize('teacher', 'admin'), moduleController.listTeacherModules);
+router.get('/modules/student', authenticate, authorize('student'), moduleController.listStudentModules);
+router.get('/student/modules', authenticate, authorize('student'), moduleController.listStudentModules);
+router.get('/modules/enrolled', authenticate, authorize('student'), moduleController.listStudentModules);
+router.get('/classes/student', authenticate, authorize('student'), moduleController.listStudentModules);
+router.get('/classes/enrolled', authenticate, authorize('student'), moduleController.listStudentModules);
+router.get('/enrolments/modules', authenticate, authorize('student'), moduleController.listStudentModules);
+router.get('/enrollments/modules', authenticate, authorize('student'), moduleController.listStudentModules);
 router.post('/modules', authenticate, authorize('teacher', 'admin'), moduleController.createModule);
 router.post('/modules/create', authenticate, authorize('teacher', 'admin'), moduleController.createModule);
 router.post('/modules/join', authenticate, authorize('student'), moduleController.joinModule);
 router.get('/modules/:moduleId/sessions', authenticate, moduleController.getModuleSessions);
+router.get('/subjects/:subjectId/attendance', authenticate, authorize('student'), moduleController.getStudentModuleAttendance);
+router.get('/modules/:moduleId/attendance', authenticate, authorize('student'), moduleController.getStudentModuleAttendance);
+router.get('/classes/:classId/attendance', authenticate, authorize('student'), moduleController.getStudentModuleAttendance);
 router.get('/modules/:moduleId/summary', authenticate, moduleController.getModuleSummary);
 
 // Sessions (teacher)
@@ -87,6 +97,9 @@ router.get(
   sessionController.getStudentActiveSessions,
 );
 router.get('/sessions/module/:moduleId', authenticate, moduleController.getModuleSessions);
+router.get('/sessions/student/module/:moduleId', authenticate, authorize('student'), moduleController.getModuleSessions);
+router.get('/student/modules/:moduleId/sessions', authenticate, authorize('student'), moduleController.getModuleSessions);
+router.get('/classes/:classId/sessions', authenticate, moduleController.getModuleSessions);
 router.get('/sessions', authenticate, moduleController.getModuleSessions);
 router.get('/sessions/:sessionId', authenticate, sessionController.getSession);
 router.patch(
@@ -123,11 +136,12 @@ router.patch(
   authorize('teacher', 'admin'),
   attendanceController.updateAttendanceStatus,
 );
-router.post('/sessions/validate-qr', authenticate, sessionController.validateQr);
 
 // Attendance (student + teacher manual edits)
 router.post('/attendance/submit', authenticate, authorize('student'), attendanceController.submitAttendance);
 router.get('/attendance/history', authenticate, authorize('student'), attendanceController.getStudentHistory);
+router.get('/attendance/module/:moduleId', authenticate, authorize('student'), moduleController.getStudentModuleAttendance);
+router.get('/attendance/history/module/:moduleId', authenticate, authorize('student'), moduleController.getStudentModuleAttendance);
 router.get('/attendance/stats', authenticate, authorize('student'), attendanceController.getStudentStats);
 router.post('/attendance/update', authenticate, authorize('teacher', 'admin'), attendanceController.updateAttendanceStatus);
 router.patch('/attendance/:recordId/status', authenticate, authorize('teacher', 'admin'), attendanceController.updateAttendanceStatus);

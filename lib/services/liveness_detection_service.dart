@@ -82,32 +82,31 @@ class LivenessDetectionService {
   }) {
     final yaw = face.headEulerAngleY ?? 0;
 
-    // NOTE: This device's front camera reports yaw with the OPPOSITE sign
-    // to the ML Kit standard. Confirmed by testing: turning LEFT gives
-    // POSITIVE yaw, turning RIGHT gives NEGATIVE yaw. Signs are flipped.
+    // ML Kit analyses the raw camera image. The preview is mirrored only for
+    // display, so the yaw sign must use the raw-image direction. This keeps the
+    // liveness step natural: when the app asks for right, turning to your right
+    // completes the right-turn step, and the same for left.
     const threshold = 15.0;
 
     debugPrint('[Liveness] yaw=$yaw isLeft=$isLeft');
 
     if (isLeft) {
-      // User's left = POSITIVE yaw on this device
-      if (yaw > threshold) _leftTurnDone = true;
+      if (yaw < -threshold) _leftTurnDone = true;
       return (
-        progress: _leftTurnDone ? 1.0 : (yaw / threshold).clamp(0.0, 1.0),
+        progress: _leftTurnDone ? 1.0 : ((-yaw) / threshold).clamp(0.0, 1.0),
         completed: _leftTurnDone,
         instruction: _leftTurnDone
             ? 'Left turn verified!'
-            : 'Turn your head to YOUR left (toward left shoulder)',
+            : 'Turn your head to YOUR left',
       );
     } else {
-      // User's right = NEGATIVE yaw on this device
-      if (yaw < -threshold) _rightTurnDone = true;
+      if (yaw > threshold) _rightTurnDone = true;
       return (
-        progress: _rightTurnDone ? 1.0 : ((-yaw) / threshold).clamp(0.0, 1.0),
+        progress: _rightTurnDone ? 1.0 : (yaw / threshold).clamp(0.0, 1.0),
         completed: _rightTurnDone,
         instruction: _rightTurnDone
             ? 'Right turn verified!'
-            : 'Turn your head to YOUR right (toward right shoulder)',
+            : 'Turn your head to YOUR right',
       );
     }
   }

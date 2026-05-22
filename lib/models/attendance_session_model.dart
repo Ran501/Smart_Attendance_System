@@ -6,8 +6,6 @@ class AttendanceSessionModel {
   final DateTime startedAt;
   final DateTime endsAt;
   final String? sessionToken;
-  final String? qrDataUrl;
-  final String? qrPayload;
   final int? presentCount;
   final String? className;
   final String? subjectName;
@@ -23,8 +21,6 @@ class AttendanceSessionModel {
     required this.startedAt,
     required this.endsAt,
     this.sessionToken,
-    this.qrDataUrl,
-    this.qrPayload,
     this.presentCount,
     this.className,
     this.subjectName,
@@ -46,8 +42,6 @@ class AttendanceSessionModel {
         json['ends_at'] as String? ?? json['endsAt'] as String,
       ),
       sessionToken: json['session_token'] as String? ?? json['sessionToken'] as String?,
-      qrDataUrl: json['qrDataUrl'] as String?,
-      qrPayload: json['qrPayload'] as String? ?? json['qr_payload'] as String?,
       presentCount: json['present_count'] as int?,
       className: json['class_name'] as String?,
       subjectName: json['subject_name'] as String?,

@@ -4,7 +4,6 @@ import '../../features/authentication/presentation/screens/login_screen.dart';
 import '../../features/authentication/presentation/screens/register_screen.dart';
 import '../../features/authentication/presentation/screens/splash_screen.dart';
 import '../../features/face_recognition/presentation/screens/face_registration_screen.dart';
-import '../../features/attendance/presentation/screens/qr_scan_screen.dart';
 import '../../features/attendance/presentation/screens/live_auth_screen.dart';
 import '../../features/attendance/presentation/screens/attendance_session_screen.dart';
 import '../../features/dashboards/presentation/screens/student_dashboard_screen.dart';
@@ -56,7 +55,6 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/face-register',
         builder: (_, __) => const FaceRegistrationScreen(),
       ),
-      GoRoute(path: '/qr-scan', builder: (_, __) => const QrScanScreen()),
       GoRoute(
         path: '/live-auth',
         builder: (_, state) {

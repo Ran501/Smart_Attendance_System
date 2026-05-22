@@ -230,21 +230,32 @@ class MetricTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final c = color ?? scheme.primary;
     return GlassCard(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(16)),
-            child: Icon(icon, color: c, size: 22),
-          ),
-          const SizedBox(height: 16),
-          Text(value, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
-          const SizedBox(height: 4),
-          Text(label, style: Theme.of(context).textTheme.bodySmall),
-        ],
+      padding: const EdgeInsets.all(14),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: constraints.maxWidth,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(16)),
+                    child: Icon(icon, color: c, size: 22),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(value, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 3),
+                  Text(label, style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }

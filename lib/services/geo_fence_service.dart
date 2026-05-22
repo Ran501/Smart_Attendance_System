@@ -105,9 +105,8 @@ class GeoFenceService {
     final ctx = navigatorKey.currentContext;
     final status = await Permission.location.request();
     if (status.isGranted) {
-      if (await Permission.location.isGranted) {
-        await Permission.locationAlways.request();
-      }
+      // Attendance only needs GPS while the screen is open. Requesting
+      // locationAlways causes Android manifest warnings and is unnecessary.
       return true;
     } else if (status.isDenied) {
       if (ctx != null && ctx.mounted) {

@@ -28,6 +28,7 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
   Map<String, dynamic>? _stats;
   bool _faceRegistered = false;
   List<Map<String, dynamic>> _activeSessions = [];
+  List<Map<String, dynamic>> _joinedModules = [];
   List<String> _enrolledClassIds = [];
   bool _loadingSessions = false;
   io.Socket? _socket;
@@ -51,16 +52,29 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
   }
 
   Future<void> _load() async {
+    Map<String, dynamic>? stats;
+    var registered = _faceRegistered;
+    var joinedModules = <Map<String, dynamic>>[];
+
     try {
-      final stats = await AttendanceService().getStats();
-      final registered = await FaceRegistrationService().isFaceRegistered();
-      if (mounted) {
-        setState(() {
-          _stats = stats;
-          _faceRegistered = registered;
-        });
-      }
+      stats = await AttendanceService().getStats();
     } catch (_) {}
+
+    try {
+      registered = await FaceRegistrationService().isFaceRegistered();
+    } catch (_) {}
+
+    try {
+      joinedModules = await CatalogService().getStudentModules();
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        if (stats != null) _stats = stats;
+        _faceRegistered = registered;
+        _joinedModules = joinedModules;
+      });
+    }
     await _loadActiveSessions();
   }
 
@@ -178,27 +192,50 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     return clean.isEmpty ? 'S' : clean[0].toUpperCase();
   }
 
-  List<Map<String, dynamic>> _modules() {
+  String _moduleKey(Map<String, dynamic> module) {
+    final raw = module['module_id'] ??
+        module['moduleId'] ??
+        module['subject_id'] ??
+        module['subjectId'] ??
+        module['class_id'] ??
+        module['classId'] ??
+        module['code'] ??
+        module['id'] ??
+        module['name'] ??
+        module['moduleName'] ??
+        module['subject_name'] ??
+        module['subjectName'] ??
+        '';
+    return raw.toString().trim().toLowerCase();
+  }
+
+  List<Map<String, dynamic>> _moduleStatsFromAttendance() {
     final candidates = [_stats?['modules'], _stats?['moduleStats'], _stats?['subjects'], _stats?['classes']];
     for (final item in candidates) {
       if (item is List) return item.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
     }
-    final total = _stats?['total'] ?? 0;
-    if (total is num && total > 0) {
-      return [
-        {
-          'name': 'Overall Attendance',
-          'teacher_name': 'Academic Office',
-          'percentage': _percentage(),
-          'attended': _stats?['present'] ?? 0,
-          'total': total,
-          'medical_leave': _stats?['medicalLeave'] ?? _stats?['medical_leave'] ?? 0,
-          'official_leave': _stats?['officialLeave'] ?? _stats?['official_leave'] ?? 0,
-          'absent': _stats?['absent'] ?? _stats?['rejected'] ?? 0,
-        }
-      ];
+    return <Map<String, dynamic>>[];
+  }
+
+  List<Map<String, dynamic>> _modules() {
+    final statModules = _moduleStatsFromAttendance();
+    final statsByKey = <String, Map<String, dynamic>>{};
+    for (final module in statModules) {
+      final key = _moduleKey(module);
+      if (key.isNotEmpty) statsByKey[key] = module;
     }
-    return const [];
+
+    if (_joinedModules.isNotEmpty) {
+      return _joinedModules.map((module) {
+        final key = _moduleKey(module);
+        final stat = statsByKey[key];
+        return stat == null ? module : <String, dynamic>{...module, ...stat};
+      }).toList();
+    }
+
+    // Do not create an "Overall Attendance" pseudo-module. The dashboard should
+    // show only actual joined modules with their own progress bars.
+    return statModules;
   }
 
   @override
@@ -302,12 +339,11 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
               ],
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(child: AppButton(label: 'QR Backup', icon: Icons.qr_code_scanner, outlined: true, onPressed: _faceRegistered ? () => context.push('/qr-scan') : null)),
-                const SizedBox(width: 10),
-                Expanded(child: AppButton(label: 'History', icon: Icons.history, outlined: true, onPressed: () => context.push('/history'))),
-              ],
+            AppButton(
+              label: 'History',
+              icon: Icons.history,
+              outlined: true,
+              onPressed: () => context.push('/history'),
             ),
           ],
         ),
@@ -505,8 +541,8 @@ class _LiveSessionBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final within = session['within_radius'] == true;
     final marked = session['already_marked'] == true;
-    final subject = session['subject_name'] as String? ?? session['subjectName'] as String? ?? 'Active Class';
-    final teacher = session['teacher_name'] as String? ?? 'Teacher';
+    final subject = (session['subject_name'] ?? session['subjectName'] ?? 'Active Class').toString();
+    final teacher = (session['teacher_name'] ?? session['teacherName'] ?? session['teacher'] ?? 'Teacher').toString();
 
     return GlassCard(
       padding: const EdgeInsets.all(18),
@@ -526,7 +562,7 @@ class _LiveSessionBanner extends StatelessWidget {
           const SizedBox(height: 10),
           Text(subject, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
           const SizedBox(height: 4),
-          Text('$teacher • Face + BLE + WiFi + Location verification', style: Theme.of(context).textTheme.bodySmall),
+          Text(teacher, style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 14),
           Row(
             children: [

@@ -271,7 +271,7 @@ class _CreateModuleSheetState extends State<_CreateModuleSheet> {
               TextField(
                 controller: _moduleIdController,
                 textCapitalization: TextCapitalization.characters,
-                decoration: const InputDecoration(labelText: 'Module ID', hintText: 'CS101-S5-A', prefixIcon: Icon(Icons.qr_code_2_outlined)),
+                decoration: const InputDecoration(labelText: 'Module ID', hintText: 'CS101-S5-A', prefixIcon: Icon(Icons.tag_outlined)),
               ),
               const SizedBox(height: 12),
               TextField(

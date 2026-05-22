@@ -36,9 +36,81 @@ function modulePayload(row) {
     semester: row.semester,
     teacher_id: row.teacher_id,
     teacher_name: row.teacher_name,
+    teacherName: row.teacher_name,
     has_join_password: !!row.has_join_password,
     created_at: row.created_at,
   };
+}
+
+function moduleStatsPayload(row) {
+  const present = Number(row.present) || 0;
+  const late = Number(row.late) || 0;
+  const absent = Number(row.absent) || 0;
+  const rejected = Number(row.rejected) || 0;
+  const medicalLeave = Number(row.medical_leave) || 0;
+  const officialLeave = Number(row.official_leave) || 0;
+  const total = Number(row.total) || 0;
+  const totalSessions = Number(row.total_sessions) || 0;
+  const attendancePercentage = total > 0 ? (present / total) * 100 : 0;
+  const absentRulePercentage = total > 0 ? ((total - absent) / total) * 100 : 0;
+  const leaveRulePercentage = total > 0
+    ? ((total - absent - medicalLeave - officialLeave) / total) * 100
+    : 0;
+  const safe = total === 0 ? true : absentRulePercentage >= 90 && leaveRulePercentage >= 80;
+
+  return {
+    ...modulePayload(row),
+    total_sessions: totalSessions,
+    totalSessions,
+    total,
+    present,
+    attended: present,
+    late,
+    absent,
+    rejected,
+    medical_leave: medicalLeave,
+    medicalLeave,
+    medical: medicalLeave,
+    official_leave: officialLeave,
+    officialLeave,
+    official: officialLeave,
+    percentage: attendancePercentage.toFixed(1),
+    attendance_percentage: attendancePercentage,
+    attendancePercentage,
+    absentRulePercentage: absentRulePercentage.toFixed(1),
+    leaveRulePercentage: leaveRulePercentage.toFixed(1),
+    safe,
+    risk: total === 0 ? 'No sessions' : safe ? 'Low' : 'High',
+  };
+}
+
+async function buildStudentModules(studentId) {
+  const result = await pool.query(
+    `SELECT s.id AS subject_id, s.name AS subject_name, s.code, s.class_id,
+            s.teacher_id, s.created_at, c.name AS class_name, c.department, c.semester,
+            u.full_name AS teacher_name, (s.join_password_hash IS NOT NULL) AS has_join_password,
+            COUNT(DISTINCT ats.id) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW())::int AS total_sessions,
+            COALESCE(SUM(COALESCE(ats.session_units, 1)) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW()), 0)::int AS total,
+            COALESCE(SUM(COALESCE(ats.session_units, 1)) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW() AND ar.status = 'PRESENT'), 0)::int AS present,
+            COALESCE(SUM(COALESCE(ats.session_units, 1)) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW() AND ar.status = 'LATE'), 0)::int AS late,
+            COALESCE(SUM(COALESCE(ats.session_units, 1)) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW() AND COALESCE(ar.status, 'ABSENT') = 'ABSENT'), 0)::int AS absent,
+            COALESCE(SUM(COALESCE(ats.session_units, 1)) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW() AND ar.status = 'REJECTED'), 0)::int AS rejected,
+            COALESCE(SUM(COALESCE(ats.session_units, 1)) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW() AND ar.status = 'MEDICAL_LEAVE'), 0)::int AS medical_leave,
+            COALESCE(SUM(COALESCE(ats.session_units, 1)) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW() AND ar.status = 'OFFICIAL_LEAVE'), 0)::int AS official_leave
+     FROM class_enrollments ce
+     JOIN subjects s ON s.class_id = ce.class_id
+     JOIN classes c ON c.id = s.class_id
+     LEFT JOIN users u ON u.id = s.teacher_id
+     LEFT JOIN attendance_sessions ats ON ats.subject_id = s.id
+     LEFT JOIN attendance_records ar ON ar.session_id = ats.id AND ar.student_id = ce.student_id
+     WHERE ce.student_id = $1
+     GROUP BY s.id, s.name, s.code, s.class_id, s.teacher_id, s.created_at,
+              c.name, c.department, c.semester, u.full_name, s.join_password_hash
+     ORDER BY s.created_at DESC, s.name ASC`,
+    [studentId],
+  );
+
+  return result.rows.map(moduleStatsPayload);
 }
 
 async function listTeacherModules(req, res) {
@@ -64,6 +136,11 @@ async function listTeacherModules(req, res) {
   res.json({ modules: result.rows.map(modulePayload) });
 }
 
+async function listStudentModules(req, res) {
+  const modules = await buildStudentModules(req.user.id);
+  res.json({ modules });
+}
+
 async function createModule(req, res) {
   const moduleId = normalizeCode(
     req.body.moduleId || req.body.subjectId || req.body.id || req.body.code,
@@ -82,8 +159,6 @@ async function createModule(req, res) {
     return res.status(400).json({ error: 'Join password must be at least 3 characters' });
   }
 
-  // The Flutter UI sends classId = moduleId as a compatibility fallback.
-  // If a class/section name is provided, use that as the real class id.
   const requestedClassId = clean(req.body.classId || req.body.class_id);
   const classId = normalizeCode(
     classNameInput || (requestedClassId && requestedClassId !== moduleId ? requestedClassId : '') || `${moduleId}-CLASS`,
@@ -120,7 +195,6 @@ async function createModule(req, res) {
       [moduleId, moduleName, subjectCodeFrom(moduleId), classId, req.user.id, joinPasswordHash],
     );
 
-    // Create a default classroom so the teacher can immediately start a session.
     await client.query(
       `INSERT INTO classrooms (name, class_id, latitude, longitude, radius_meters, allowed_wifi_ssid)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -138,7 +212,7 @@ async function createModule(req, res) {
       class_name: className,
       department,
       semester: section,
-      teacher_name: req.user.email,
+      teacher_name: req.user.fullName || req.user.email,
     });
 
     if (req.io) req.io.emit('module:created', payload);
@@ -213,14 +287,21 @@ async function joinModule(req, res) {
 }
 
 async function getModuleSessions(req, res) {
-  const moduleId = normalizeCode(req.params.moduleId || req.params.subjectId || req.query.moduleId || req.query.subjectId, '');
+  const moduleId = normalizeCode(
+    req.params.moduleId || req.params.subjectId || req.params.classId || req.query.moduleId || req.query.subjectId || req.query.classId,
+    '',
+  );
   if (!moduleId) return res.status(400).json({ error: 'Module ID is required' });
 
   const params = [moduleId];
-  let teacherFilter = '';
+  let accessJoin = '';
+  let accessFilter = '';
   if (req.user.role === 'teacher') {
     params.push(req.user.id);
-    teacherFilter = `AND s.teacher_id = $${params.length}`;
+    accessFilter = `AND s.teacher_id = $${params.length}`;
+  } else if (req.user.role === 'student') {
+    params.push(req.user.id);
+    accessJoin = `JOIN class_enrollments ce ON ce.class_id = s.class_id AND ce.student_id = $${params.length}`;
   }
 
   const result = await pool.query(
@@ -239,14 +320,49 @@ async function getModuleSessions(req, res) {
      FROM attendance_sessions s
      JOIN subjects sub ON sub.id = s.subject_id
      JOIN classes c ON c.id = s.class_id
+     ${accessJoin}
      LEFT JOIN attendance_records ar ON ar.session_id = s.id
-     WHERE (UPPER(s.subject_id) = $1 OR UPPER(sub.code) = $1) ${teacherFilter}
+     WHERE (UPPER(s.subject_id) = $1 OR UPPER(sub.code) = $1 OR UPPER(s.class_id) = $1) ${accessFilter}
      GROUP BY s.id, c.name, sub.name
      ORDER BY s.started_at DESC`,
     params,
   );
 
   res.json({ sessions: result.rows });
+}
+
+async function getStudentModuleAttendance(req, res) {
+  const moduleId = normalizeCode(
+    req.params.moduleId || req.params.subjectId || req.params.classId || req.query.moduleId || req.query.subjectId || req.query.classId,
+    '',
+  );
+  if (!moduleId) return res.status(400).json({ error: 'Module ID is required' });
+
+  const result = await pool.query(
+    `SELECT COALESCE(ar.id::text, CONCAT(s.id, '-', $2::text)) AS id,
+            s.id AS session_id, s.id AS session_code, s.class_id, s.subject_id,
+            sub.id AS module_id, sub.code AS module_code,
+            sub.name AS subject_name, sub.name AS module_name,
+            c.name AS class_name,
+            COALESCE(ar.status, 'ABSENT') AS status,
+            ar.match_confidence, ar.rejection_reason, ar.manual_note,
+            COALESCE(ar.marked_at, s.started_at) AS marked_at,
+            ar.updated_at,
+            s.started_at, s.ends_at, s.closed_at,
+            COALESCE(s.session_units, 1) AS session_units,
+            COALESCE(s.session_units, 1) AS "sessionUnits"
+     FROM attendance_sessions s
+     JOIN subjects sub ON sub.id = s.subject_id
+     JOIN classes c ON c.id = s.class_id
+     JOIN class_enrollments ce ON ce.class_id = s.class_id AND ce.student_id = $2
+     LEFT JOIN attendance_records ar ON ar.session_id = s.id AND ar.student_id = $2
+     WHERE (UPPER(s.subject_id) = $1 OR UPPER(sub.code) = $1 OR UPPER(s.class_id) = $1)
+       AND s.started_at <= NOW()
+     ORDER BY s.started_at DESC`,
+    [moduleId, req.user.id],
+  );
+
+  res.json({ moduleId, records: result.rows, attendance: result.rows });
 }
 
 async function getModuleSummary(req, res) {
@@ -311,8 +427,11 @@ async function getModuleSummary(req, res) {
 
 module.exports = {
   listTeacherModules,
+  listStudentModules,
+  buildStudentModules,
   createModule,
   joinModule,
   getModuleSessions,
+  getStudentModuleAttendance,
   getModuleSummary,
 };

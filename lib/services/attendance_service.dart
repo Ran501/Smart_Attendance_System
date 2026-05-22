@@ -18,35 +18,53 @@ class AttendanceService {
     int sessionUnits = 1,
   }) async {
     final safeUnits = sessionUnits.clamp(1, 3).toInt();
-    final res = await _api.dio.post('/sessions', data: {
-      'classId': classId,
-      'subjectId': subjectId,
-      'moduleId': subjectId,
-      'classroomId': classroomId,
-      'durationMinutes': durationMinutes,
-      'sessionUnits': safeUnits,
-      'session_units': safeUnits,
-      'periodCount': safeUnits,
-      'blockPeriods': safeUnits,
-      'latitude': latitude,
-      'longitude': longitude,
-      if (accuracy != null) 'accuracy': accuracy,
-      if (radiusMeters != null) 'radiusMeters': radiusMeters,
-    });
-    return AttendanceSessionModel.fromJson(res.data as Map<String, dynamic>);
+    try {
+      final res = await _api.dio.post('/sessions', data: {
+        'classId': classId,
+        'subjectId': subjectId,
+        'moduleId': subjectId,
+        'classroomId': classroomId,
+        'durationMinutes': durationMinutes,
+        'sessionUnits': safeUnits,
+        'session_units': safeUnits,
+        'periodCount': safeUnits,
+        'blockPeriods': safeUnits,
+        'latitude': latitude,
+        'longitude': longitude,
+        if (accuracy != null) 'accuracy': accuracy,
+        if (radiusMeters != null) 'radiusMeters': radiusMeters,
+      });
+      return AttendanceSessionModel.fromJson(res.data as Map<String, dynamic>);
+    } on DioException catch (e) {
+      throw Exception(ApiClient.messageFromDio(e));
+    }
   }
 
-  Future<void> updateSessionLocation({
+  Future<bool> updateSessionLocation({
     required String sessionId,
     required double latitude,
     required double longitude,
     double? accuracy,
   }) async {
-    await _api.dio.patch('/sessions/$sessionId/location', data: {
-      'latitude': latitude,
-      'longitude': longitude,
-      if (accuracy != null) 'accuracy': accuracy,
-    });
+    try {
+      final res = await _api.dio.patch('/sessions/$sessionId/location', data: {
+        'latitude': latitude,
+        'longitude': longitude,
+        if (accuracy != null) 'accuracy': accuracy,
+      });
+
+      final data = res.data;
+      if (data is Map && data['active'] == false) return false;
+      return true;
+    } on DioException catch (e) {
+      // A 404/410 can happen when the teacher page is still open but the
+      // session has already expired or was closed. Do not show this as an app
+      // error; the caller will stop the location timer.
+      if (e.response?.statusCode == 404 || e.response?.statusCode == 410) {
+        return false;
+      }
+      throw Exception(ApiClient.messageFromDio(e));
+    }
   }
 
   Future<({List<Map<String, dynamic>> sessions, List<String> enrolledClassIds})>
@@ -93,14 +111,6 @@ class AttendanceService {
         .toList();
   }
 
-  Future<Map<String, dynamic>> validateQr(String sessionId, String sessionToken) async {
-    final res = await _api.dio.post('/sessions/validate-qr', data: {
-      'sessionId': sessionId,
-      'sessionToken': sessionToken,
-    });
-    return res.data as Map<String, dynamic>;
-  }
-
   Future<Map<String, dynamic>> submitAttendance(Map<String, dynamic> payload) async {
     try {
       final res = await _api.dio.post('/attendance/submit', data: payload);
@@ -115,6 +125,119 @@ class AttendanceService {
       }
       throw Exception(ApiClient.messageFromDio(e));
     }
+  }
+
+
+  List<Map<String, dynamic>> _mapList(dynamic data) {
+    if (data is List) {
+      return data.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+    }
+    if (data is Map) {
+      for (final key in const [
+        'records',
+        'attendance',
+        'history',
+        'sessions',
+        'modules',
+        'subjects',
+        'classes',
+        'data',
+      ]) {
+        final value = data[key];
+        if (value is List) {
+          return value.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+        }
+        if (value is Map) return _mapList(value);
+      }
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  bool _matchesModule(Map<String, dynamic> row, String moduleId) {
+    final normalized = moduleId.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    final keys = [
+      row['module_id'],
+      row['moduleId'],
+      row['subject_id'],
+      row['subjectId'],
+      row['class_id'],
+      row['classId'],
+      row['module_code'],
+      row['moduleCode'],
+      row['code'],
+      row['id'],
+    ];
+    return keys.any((value) => value?.toString().trim().toLowerCase() == normalized);
+  }
+
+  Future<List<Map<String, dynamic>>> getStudentModuleRecords({required String moduleId}) async {
+    final normalized = moduleId.trim();
+    if (normalized.isEmpty) return <Map<String, dynamic>>[];
+    final encoded = Uri.encodeComponent(normalized);
+    final attempts = <String>[
+      '/attendance/module/$encoded',
+      '/attendance/history/module/$encoded',
+      '/attendance/history?moduleId=$encoded',
+      '/attendance/history?subjectId=$encoded',
+      '/attendance/history?classId=$encoded',
+      '/modules/$encoded/attendance',
+      '/subjects/$encoded/attendance',
+      '/classes/$encoded/attendance',
+    ];
+
+    DioException? lastError;
+    for (final path in attempts) {
+      try {
+        final res = await _api.dio.get(path);
+        final records = _mapList(res.data);
+        if (records.isNotEmpty) return records;
+      } on DioException catch (e) {
+        lastError = e;
+        if (e.response?.statusCode != 404 && e.response?.statusCode != 405) {
+          throw Exception(ApiClient.messageFromDio(e));
+        }
+      }
+    }
+
+    try {
+      final res = await _api.dio.get('/attendance/history');
+      return _mapList(res.data).where((row) => _matchesModule(row, normalized)).toList();
+    } on DioException catch (e) {
+      if (lastError != null) return <Map<String, dynamic>>[];
+      throw Exception(ApiClient.messageFromDio(e));
+    } catch (_) {
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getStudentModuleSessions({required String moduleId}) async {
+    final normalized = moduleId.trim();
+    if (normalized.isEmpty) return <Map<String, dynamic>>[];
+    final encoded = Uri.encodeComponent(normalized);
+    final attempts = <String>[
+      '/sessions/student/module/$encoded',
+      '/student/modules/$encoded/sessions',
+      '/modules/$encoded/sessions',
+      '/subjects/$encoded/sessions',
+      '/classes/$encoded/sessions',
+      '/sessions?moduleId=$encoded',
+      '/sessions?subjectId=$encoded',
+      '/sessions?classId=$encoded',
+    ];
+
+    for (final path in attempts) {
+      try {
+        final res = await _api.dio.get(path);
+        final sessions = _mapList(res.data);
+        if (sessions.isNotEmpty) return sessions;
+      } on DioException catch (e) {
+        if (e.response?.statusCode != 404 && e.response?.statusCode != 405) {
+          throw Exception(ApiClient.messageFromDio(e));
+        }
+      }
+    }
+    return <Map<String, dynamic>>[];
   }
 
   Future<List<AttendanceRecordModel>> getHistory() async {

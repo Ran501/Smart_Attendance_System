@@ -1,84 +1,50 @@
-# FacePass Bhutan Backend Changes
+# FacePass Backend Changes
 
-This backend update connects the new Flutter UI changes to the existing PostgreSQL database flow.
+## Latest changes
 
-## Added/updated API support
+- Removed QR backup attendance from the backend API.
+  - Removed QR generation from session creation.
+  - Removed `/sessions/validate-qr` route.
+  - Removed `qrcode` dependency from `package.json` and `package-lock.json`.
+  - Added migration `004_remove_qr_payload.sql` to remove the old `qr_payload` column if you want the database cleaned.
 
-### Modules
-- `GET /api/v1/modules/teacher`
-- `GET /api/v1/teacher/modules`
-- `GET /api/v1/modules`
-- `POST /api/v1/modules`
-- `POST /api/v1/modules/create`
-- `POST /api/v1/classes`
-- `POST /api/v1/classes/create`
-- `POST /api/v1/modules/join`
-- `POST /api/v1/classes/join`
+- Added student joined-module APIs for the new student dashboard.
+  - `GET /modules/student`
+  - `GET /student/modules`
+  - `GET /modules/enrolled`
+  - `GET /classes/student`
+  - `GET /classes/enrolled`
+  - `GET /enrolments/modules`
+  - `GET /enrollments/modules`
 
-Teacher module creation stores the module in the existing `subjects` table and creates/uses a class in the existing `classes` table. Join passwords are stored as hashes in `subjects.join_password_hash`.
+- Added per-module student attendance report APIs.
+  - `GET /attendance/module/:moduleId`
+  - `GET /attendance/history/module/:moduleId`
+  - `GET /modules/:moduleId/attendance`
+  - `GET /subjects/:subjectId/attendance`
+  - `GET /classes/:classId/attendance`
 
-### Module sessions and analytics
-- `GET /api/v1/modules/:moduleId/sessions`
-- `GET /api/v1/subjects/:subjectId/sessions`
-- `GET /api/v1/sessions/module/:moduleId`
-- `GET /api/v1/sessions?moduleId=...`
-- `GET /api/v1/analytics/teacher?moduleId=...`
+- Added module-specific session API aliases used by the Flutter frontend.
+  - `GET /sessions/student/module/:moduleId`
+  - `GET /student/modules/:moduleId/sessions`
+  - `GET /classes/:classId/sessions`
 
-These return only the selected module sessions, matching the new top-bar analytics flow.
+- Updated `/attendance/stats` to include `modules` and `moduleStats`, so the frontend can show each joined module with its own progress bar instead of a fake overall module card.
 
-### Block-period session count
-`POST /api/v1/sessions` now accepts:
-- `sessionUnits`
-- `session_units`
-- `periodCount`
-- `blockPeriods`
+- Kept the live face attendance flow compatible with the new auto-capture frontend.
+  - Backend still expects `liveEmbedding`, `livenessPassed`, `sessionId`, `sessionToken`, location, and device data.
+  - Extra liveness/camera fields from the app are tolerated safely because unknown request fields are ignored.
 
-Values are clamped to 1, 2, or 3. Only one attendance session is created, but it counts as multiple sessions in summaries.
+## Database migration for existing deployments
 
-### Session roster and manual edit
-- `GET /api/v1/sessions/:sessionId/roster`
-- `GET /api/v1/sessions/:sessionId/attendance?includeAll=true`
-- `PATCH /api/v1/sessions/:sessionId/attendance/:studentId`
-- `PATCH /api/v1/attendance/:recordId/status`
-- `PATCH /api/v1/attendance/:recordId`
-- `PATCH /api/v1/attendance/records/:recordId`
-- `POST /api/v1/attendance/update`
-
-Teachers can change records to:
-- `PRESENT`
-- `ABSENT`
-- `MEDICAL_LEAVE`
-- `OFFICIAL_LEAVE`
-- `REJECTED`
-
-The roster returns all enrolled students. Students without a marked record are returned as `ABSENT`.
-
-### Reports
-- `GET /api/v1/reports/session/:sessionId`
-- `GET /api/v1/reports/module/:moduleId`
-
-## Database migration
-
-Run this once on your existing database:
+If your database already has the old QR column and you want to remove it, run:
 
 ```bash
-npm run db:migrate:facepass
+npm run db:migrate:host -- 004_remove_qr_payload.sql
 ```
 
-or:
+Or run directly:
 
 ```bash
-node src/database/run-migration.js 003_facepass_module_flow.sql
+node src/database/run-migration.js 004_remove_qr_payload.sql
 ```
-
-The migration adds:
-- `MEDICAL_LEAVE` and `OFFICIAL_LEAVE` enum values
-- `subjects.join_password_hash`
-- `attendance_sessions.session_units`
-- `attendance_records.manual_note`
-- `attendance_records.updated_by`
-- `attendance_records.updated_at`
-
-## Important
-
-The original `.env` file is not included in this zip for safety. Copy your existing `.env` back into the backend folder before running.

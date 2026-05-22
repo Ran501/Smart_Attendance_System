@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+
 import '../../../../services/attendance_service.dart';
 import '../../../../services/bluetooth_validation_service.dart';
 import '../../../../services/device_service.dart';
@@ -13,8 +15,8 @@ import '../../../../services/face_embedding_service.dart';
 import '../../../../services/geo_fence_service.dart';
 import '../../../../services/liveness_detection_service.dart';
 import '../../../../services/wifi_validation_service.dart';
-import '../../../../widgets/app_button.dart';
 import '../../../../widgets/enterprise_shell.dart';
+import '../../../../widgets/natural_camera_preview.dart';
 
 class LiveAuthScreen extends StatefulWidget {
   final Map<String, dynamic> sessionData;
@@ -27,6 +29,8 @@ class LiveAuthScreen extends StatefulWidget {
 
 class _LiveAuthScreenState extends State<LiveAuthScreen> {
   CameraController? _camera;
+  Timer? _autoScanTimer;
+
   final _embedding = FaceEmbeddingService();
   final _liveness = LivenessDetectionService();
   final _geo = GeoFenceService();
@@ -37,6 +41,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   List<LivenessChallenge> _challenges = [];
   int _challengeIndex = 0;
   bool _livenessComplete = false;
+  bool _autoScanning = false;
   bool _submitting = false;
   String _instruction = 'Initializing AI camera...';
   double _progress = 0;
@@ -49,8 +54,10 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   void initState() {
     super.initState();
     _challenges = _liveness.generateChallengeSequence();
-    if (_challenges.isNotEmpty) _liveness.startChallenge(_challenges.first);
-    _instruction = 'Follow the liveness prompts';
+    if (_challenges.isNotEmpty) {
+      _liveness.startChallenge(_challenges.first);
+      _instruction = _instructionForChallenge(_challenges.first);
+    }
     _initCamera();
     _embedding.initialize();
   }
@@ -58,71 +65,153 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   Future<void> _initCamera() async {
     try {
       final cameras = await availableCameras();
-      final front = cameras.firstWhere((c) => c.lensDirection == CameraLensDirection.front, orElse: () => cameras.first);
-      _camera = CameraController(front, ResolutionPreset.medium, enableAudio: false);
+      final front = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+      _camera = CameraController(
+        front,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
       await _camera!.initialize();
-      await _camera!.startImageStream(_processFrame);
+      _startAutoScanLoop();
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) setState(() => _instruction = 'Camera unavailable: $e');
     }
   }
 
-  Future<void> _processFrame(CameraImage image) async {
-    if (_livenessComplete || _submitting) return;
+  void _startAutoScanLoop() {
+    _autoScanTimer?.cancel();
+    _autoScanTimer = Timer.periodic(
+      const Duration(milliseconds: 900),
+      (_) => _autoProcessLivenessStep(),
+    );
   }
 
-  Future<void> _runLivenessStep() async {
-    if (_camera == null || !_camera!.value.isInitialized) {
-      _showResult(false, 'Camera not initialized');
-      return;
-    }
-    if (_challengeIndex >= _challenges.length) {
-      setState(() => _livenessComplete = true);
+  Future<void> _autoProcessLivenessStep() async {
+    final camera = _camera;
+    if (!mounted ||
+        camera == null ||
+        !camera.value.isInitialized ||
+        camera.value.isTakingPicture ||
+        _autoScanning ||
+        _submitting ||
+        _livenessComplete ||
+        _challengeIndex >= _challenges.length) {
       return;
     }
 
-    setState(() => _submitting = true);
+    setState(() => _autoScanning = true);
 
+    XFile? file;
     try {
-      await _camera!.stopImageStream();
-      final file = await _camera!.takePicture();
+      file = await camera.takePicture();
+      final bytes = await File(file.path).readAsBytes();
       final inputImage = InputImage.fromFilePath(file.path);
       final faces = await _embedding.detectFaces(inputImage);
 
       if (faces.isEmpty) {
-        setState(() => _instruction = 'No face detected. Align your face inside the circle.');
+        if (mounted) {
+          setState(() {
+            _progress = 0;
+            _faceVerified = false;
+            _instruction = 'No face detected. Keep your face inside the circle.';
+          });
+        }
         return;
       }
 
-      final result = _liveness.processFrame(faces.first);
-      setState(() {
-        _progress = result.progress;
-        _instruction = result.instruction;
-        _faceVerified = result.progress > 0.35;
-      });
-
-      if (result.completed) {
-        if (_challengeIndex < _challenges.length - 1) {
-          _challengeIndex++;
-          _liveness.startChallenge(_challenges[_challengeIndex]);
-        } else {
+      if (faces.length > 1) {
+        if (mounted) {
           setState(() {
-            _livenessComplete = true;
-            _faceVerified = true;
+            _instruction = 'Only one face should be visible during attendance.';
           });
-          await _submitAttendance(await File(file.path).readAsBytes(), faces.first);
         }
+        return;
       }
+
+      final face = faces.first;
+      final result = _liveness.processFrame(face);
+
+      if (mounted) {
+        setState(() {
+          _progress = result.progress.clamp(0.0, 1.0).toDouble();
+          _instruction = result.instruction;
+          _faceVerified = result.progress > 0.35;
+        });
+      }
+
+      if (!result.completed) return;
+
+      if (_challengeIndex < _challenges.length - 1) {
+        _challengeIndex++;
+        _liveness.startChallenge(_challenges[_challengeIndex]);
+        if (mounted) {
+          setState(() {
+            _progress = 0;
+            _faceVerified = true;
+            _instruction = _instructionForChallenge(_challenges[_challengeIndex]);
+          });
+        }
+        return;
+      }
+
+      _autoScanTimer?.cancel();
+      if (mounted) {
+        setState(() {
+          _livenessComplete = true;
+          _faceVerified = true;
+          _progress = 1;
+          _instruction = 'Live face verified. Submitting attendance...';
+        });
+      }
+
+      await _submitAttendance(bytes, face);
+    } catch (e) {
+      if (mounted) setState(() => _instruction = 'Camera check failed: $e');
     } finally {
-      if (mounted) setState(() => _submitting = false);
-      if (_camera != null && _camera!.value.isInitialized && !_livenessComplete) {
-        await _camera!.startImageStream(_processFrame);
+      if (file != null) {
+        try {
+          await File(file.path).delete();
+        } catch (_) {}
       }
+      if (mounted) setState(() => _autoScanning = false);
     }
   }
 
-  bool _boolFromSession(Map<String, dynamic> session, List<String> keys, {bool fallback = false}) {
+  String _instructionForChallenge(LivenessChallenge challenge) {
+    switch (challenge) {
+      case LivenessChallenge.smile:
+        return 'Smile naturally — it will capture automatically.';
+      case LivenessChallenge.turnHeadLeft:
+        return 'Turn your head to your left — it will capture automatically.';
+      case LivenessChallenge.turnHeadRight:
+        return 'Turn your head to your right — it will capture automatically.';
+      case LivenessChallenge.blinkTwice:
+        return 'Blink twice — it will capture automatically.';
+    }
+  }
+
+  String _challengeName(LivenessChallenge challenge) {
+    switch (challenge) {
+      case LivenessChallenge.smile:
+        return 'Smile';
+      case LivenessChallenge.turnHeadLeft:
+        return 'Left turn';
+      case LivenessChallenge.turnHeadRight:
+        return 'Right turn';
+      case LivenessChallenge.blinkTwice:
+        return 'Blink';
+    }
+  }
+
+  bool _boolFromSession(
+    Map<String, dynamic> session,
+    List<String> keys, {
+    bool fallback = false,
+  }) {
     for (final key in keys) {
       final value = session[key];
       if (value is bool) return value;
@@ -134,7 +223,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   Future<void> _submitAttendance(List<int> bytes, Face face) async {
     setState(() {
       _submitting = true;
-      _instruction = 'Running security checks...';
+      _instruction = 'Running classroom security checks...';
     });
 
     try {
@@ -148,8 +237,12 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       final geoOk = _geo.isInsideRadius(
         studentLat: position.latitude,
         studentLon: position.longitude,
-        centerLat: (session['latitude'] as num?)?.toDouble() ?? (session['host_latitude'] as num?)?.toDouble() ?? 0,
-        centerLon: (session['longitude'] as num?)?.toDouble() ?? (session['host_longitude'] as num?)?.toDouble() ?? 0,
+        centerLat: (session['latitude'] as num?)?.toDouble() ??
+            (session['host_latitude'] as num?)?.toDouble() ??
+            0,
+        centerLon: (session['longitude'] as num?)?.toDouble() ??
+            (session['host_longitude'] as num?)?.toDouble() ??
+            0,
         radiusMeters: (session['radius_meters'] as num?)?.toDouble() ?? 100,
       );
       setState(() => _locationVerified = geoOk);
@@ -159,7 +252,10 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       }
 
       final wifiInfo = await _wifi.getWifiInfo();
-      final wifiRequired = _boolFromSession(session, ['wifi_required', 'wifiRequired', 'wifi_enabled', 'wifiEnabled']);
+      final wifiRequired = _boolFromSession(
+        session,
+        ['wifi_required', 'wifiRequired', 'wifi_enabled', 'wifiEnabled'],
+      );
       final wifiOk = _wifi.validateWifi(
         currentSsid: wifiInfo.ssid,
         currentBssid: wifiInfo.bssid,
@@ -172,7 +268,10 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         return;
       }
 
-      final bleRequired = _boolFromSession(session, ['ble_required', 'bleRequired', 'bluetooth_required', 'bluetoothRequired']);
+      final bleRequired = _boolFromSession(
+        session,
+        ['ble_required', 'bleRequired', 'bluetooth_required', 'bluetoothRequired'],
+      );
       final bleResult = await _ble.scanForTeacherBeacon(
         sessionId: widget.sessionData['sessionId']?.toString() ?? '',
         expectedDeviceId: session['ble_device_id'] as String? ?? session['bleDeviceId'] as String?,
@@ -185,9 +284,15 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       }
 
       setState(() => _instruction = 'Generating secure face embedding...');
-      final embedding = await _embedding.generateEmbedding(Uint8List.fromList(bytes), face);
+      final embedding = await _embedding.generateEmbedding(
+        Uint8List.fromList(bytes),
+        face,
+      );
       if (embedding == null) {
-        _showResult(false, 'Face embedding model is not available. Check mobile_face_net.tflite asset.');
+        _showResult(
+          false,
+          'Face embedding model is not available. Check mobile_face_net.tflite asset.',
+        );
         return;
       }
 
@@ -233,9 +338,17 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
-        icon: Icon(success ? Icons.check_circle : Icons.error, color: success ? Colors.green : Colors.red, size: 48),
+        icon: Icon(
+          success ? Icons.check_circle : Icons.error,
+          color: success ? Colors.green : Colors.red,
+          size: 48,
+        ),
         title: Text(success ? 'Attendance Marked' : 'Attendance Rejected'),
-        content: Text(confidence != null ? '$message\nFace confidence: ${(confidence * 100).toStringAsFixed(1)}%' : message),
+        content: Text(
+          confidence != null
+              ? '$message\nFace confidence: ${(confidence * 100).toStringAsFixed(1)}%'
+              : message,
+        ),
         actions: [
           TextButton(
             onPressed: () {
@@ -251,6 +364,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
 
   @override
   void dispose() {
+    _autoScanTimer?.cancel();
     _camera?.dispose();
     _embedding.dispose();
     super.dispose();
@@ -258,10 +372,17 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final progressValue = _challenges.isEmpty ? 0.0 : (_challengeIndex + _progress) / _challenges.length;
+    final progressValue = _challenges.isEmpty
+        ? 0.0
+        : ((_challengeIndex + _progress) / _challenges.length)
+            .clamp(0.0, 1.0)
+            .toDouble();
 
     return EnterpriseScaffold(
-      appBar: AppBar(title: const Text('Live AI Verification'), automaticallyImplyLeading: false),
+      appBar: AppBar(
+        title: const Text('Live AI Verification'),
+        automaticallyImplyLeading: false,
+      ),
       body: Column(
         children: [
           Expanded(
@@ -269,11 +390,15 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
               fit: StackFit.expand,
               children: [
                 if (_camera?.value.isInitialized == true)
-                  CameraPreview(_camera!)
+                  NaturalCameraPreview(controller: _camera!)
                 else
                   const Center(child: CircularProgressIndicator()),
                 Positioned.fill(
-                  child: CustomPaint(painter: _FaceScannerPainter(color: Theme.of(context).colorScheme.primary)),
+                  child: CustomPaint(
+                    painter: _FaceScannerPainter(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
                 ),
                 Positioned(
                   top: 96,
@@ -283,9 +408,17 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
                     padding: const EdgeInsets.all(14),
                     child: Row(
                       children: [
-                        Icon(Icons.auto_awesome, color: Theme.of(context).colorScheme.primary),
+                        Icon(
+                          Icons.auto_awesome,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
                         const SizedBox(width: 10),
-                        Expanded(child: Text(_instruction, style: Theme.of(context).textTheme.titleSmall)),
+                        Expanded(
+                          child: Text(
+                            _instruction,
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -299,28 +432,53 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                LinearProgressIndicator(value: progressValue.clamp(0.0, 1.0).toDouble(), minHeight: 8, borderRadius: BorderRadius.circular(999)),
+                LinearProgressIndicator(
+                  value: progressValue,
+                  minHeight: 8,
+                  borderRadius: BorderRadius.circular(999),
+                ),
                 const SizedBox(height: 14),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   alignment: WrapAlignment.center,
                   children: [
-                    _CheckChip(label: 'Face Verified', done: _faceVerified),
-                    _CheckChip(label: 'Bluetooth Verified', done: _bleVerified),
-                    _CheckChip(label: 'WiFi Verified', done: _wifiVerified),
-                    _CheckChip(label: 'Location Verified', done: _locationVerified),
+                    _CheckChip(label: 'Face Live', done: _faceVerified),
+                    _CheckChip(label: 'Bluetooth', done: _bleVerified),
+                    _CheckChip(label: 'WiFi', done: _wifiVerified),
+                    _CheckChip(label: 'Location', done: _locationVerified),
                   ],
                 ),
                 const SizedBox(height: 12),
                 if (!_livenessComplete) ...[
                   Text(
-                    _challenges.isEmpty ? 'Preparing liveness check' : 'Step ${_challengeIndex + 1}/${_challenges.length}: ${_challenges[_challengeIndex].name}',
+                    _challenges.isEmpty
+                        ? 'Preparing liveness check'
+                        : 'Step ${_challengeIndex + 1}/${_challenges.length}: ${_challengeName(_challenges[_challengeIndex])}',
                     style: Theme.of(context).textTheme.bodySmall,
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: 12),
-                  AppButton(label: 'Verify Step', icon: Icons.verified_user_outlined, loading: _submitting, onPressed: _runLivenessStep),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: _autoScanning
+                            ? const CircularProgressIndicator(strokeWidth: 2)
+                            : const Icon(Icons.videocam, size: 18),
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          'Auto capture is on — no need to take a selfie.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ],
+                  ),
                 ] else ...[
                   const SizedBox(height: 10),
                   const CircularProgressIndicator(),
@@ -328,7 +486,11 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
                   const Text('Submitting attendance securely...'),
                 ],
                 const SizedBox(height: 8),
-                Text('Face • BLE • Campus WiFi • Geo-fence • Device fingerprint', style: Theme.of(context).textTheme.bodySmall, textAlign: TextAlign.center),
+                Text(
+                  'Smile and head turn are captured automatically.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                  textAlign: TextAlign.center,
+                ),
               ],
             ),
           ).animate().fadeIn(duration: 350.ms).slideY(begin: 0.08),
@@ -346,16 +508,33 @@ class _CheckChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = done ? const Color(0xFF10B981) : Theme.of(context).colorScheme.outline;
+    final color = done
+        ? const Color(0xFF10B981)
+        : Theme.of(context).colorScheme.outline;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(color: color.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(999), border: Border.all(color: color.withValues(alpha: 0.22))),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(done ? Icons.check_circle : Icons.radio_button_unchecked, size: 16, color: color),
+          Icon(
+            done ? Icons.check_circle : Icons.radio_button_unchecked,
+            size: 16,
+            color: color,
+          ),
           const SizedBox(width: 6),
-          Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 12)),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+            ),
+          ),
         ],
       ),
     );
@@ -385,10 +564,19 @@ class _FaceScannerPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.2;
     canvas.drawCircle(center, radius * 0.72, guidePaint);
-    canvas.drawLine(Offset(center.dx - radius, center.dy), Offset(center.dx + radius, center.dy), guidePaint);
-    canvas.drawLine(Offset(center.dx, center.dy - radius), Offset(center.dx, center.dy + radius), guidePaint);
+    canvas.drawLine(
+      Offset(center.dx - radius, center.dy),
+      Offset(center.dx + radius, center.dy),
+      guidePaint,
+    );
+    canvas.drawLine(
+      Offset(center.dx, center.dy - radius),
+      Offset(center.dx, center.dy + radius),
+      guidePaint,
+    );
   }
 
   @override
-  bool shouldRepaint(covariant _FaceScannerPainter oldDelegate) => oldDelegate.color != color;
+  bool shouldRepaint(covariant _FaceScannerPainter oldDelegate) =>
+      oldDelegate.color != color;
 }

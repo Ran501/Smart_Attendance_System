@@ -6,6 +6,7 @@ const morgan = require('morgan');
 const { Server } = require('socket.io');
 const config = require('./config');
 const routes = require('./routes');
+const { ensureRuntimeSchema } = require('./database/ensureSchema');
 
 const app = express();
 const server = http.createServer(app);
@@ -52,8 +53,16 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(config.port, () => {
-  console.log(`Smart Attendance API running on port ${config.port}`);
+async function start() {
+  await ensureRuntimeSchema();
+  server.listen(config.port, () => {
+    console.log(`Smart Attendance API running on port ${config.port}`);
+  });
+}
+
+start().catch((err) => {
+  console.error('Failed to start Smart Attendance API:', err);
+  process.exit(1);
 });
 
 module.exports = { app, server, io };

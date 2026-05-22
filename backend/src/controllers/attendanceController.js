@@ -4,6 +4,7 @@ const { isInsideGeoFence, checkHostProximity, distanceMeters } = require('../uti
 const { cosineSimilarity } = require('../utils/face');
 const { logAudit, logFraud } = require('../services/auditService');
 const { expireStaleSessions } = require('./sessionController');
+const { buildStudentModules } = require('./moduleController');
 
 const EDITABLE_STATUSES = new Set([
   'PRESENT',
@@ -346,6 +347,14 @@ async function getStudentStats(req, res) {
   const officialLeave = parseInt(stats.official_leave, 10) || 0;
   const absentRulePercentage = total > 0 ? ((total - absent) / total) * 100 : 0;
   const leaveRulePercentage = total > 0 ? ((total - absent - medicalLeave - officialLeave) / total) * 100 : 0;
+
+  let modules = [];
+  try {
+    modules = await buildStudentModules(req.user.id);
+  } catch (e) {
+    console.warn('[attendance] Could not build per-module stats:', e.message);
+  }
+
   res.json({
     present,
     late: parseInt(stats.late, 10) || 0,
@@ -358,6 +367,8 @@ async function getStudentStats(req, res) {
     absentRulePercentage: absentRulePercentage.toFixed(1),
     leaveRulePercentage: leaveRulePercentage.toFixed(1),
     safe: absentRulePercentage >= 90 && leaveRulePercentage >= 80,
+    modules,
+    moduleStats: modules,
   });
 }
 

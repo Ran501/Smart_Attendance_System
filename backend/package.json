@@ -9,7 +9,9 @@
     "db:migrate": "node src/database/migrate.js",
     "db:migrate:host": "node src/database/run-migration.js",
     "db:seed": "node src/database/seed.js",
-    "db:migrate:facepass": "node src/database/run-migration.js 003_facepass_module_flow.sql"
+    "db:migrate:facepass": "node src/database/run-migration.js 003_facepass_module_flow.sql",
+    "db:migrate:no-qr": "node src/database/run-migration.js 004_remove_qr_payload.sql",
+    "db:repair": "node src/database/run-migration.js 005_repair_live_session_columns.sql"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -21,7 +23,6 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "pg": "^8.13.3",
-    "qrcode": "^1.5.4",
     "socket.io": "^4.8.1",
     "uuid": "^11.1.0"
   },

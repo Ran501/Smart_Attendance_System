@@ -1,4 +1,3 @@
-const QRCode = require('qrcode');
 const pool = require('../database/pool');
 const config = require('../config');
 const { generateSessionId, generateSessionToken } = require('../utils/sessionId');
@@ -21,6 +20,44 @@ function statusLabel(status) {
   return upper;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value) {
+  return typeof value === 'string' && UUID_RE.test(value.trim());
+}
+
+function pgErrorMessage(err) {
+  if (!err) return 'Unknown server error';
+  if (err.code === '23503') return 'Selected class, module, or classroom does not exist.';
+  if (err.code === '22P02') return 'Invalid classroom value. Refresh the module page and try again.';
+  if (err.code === '42703') return 'Database schema is missing a required column. Restart the backend so the repair migration can run.';
+  return err.message || 'Server failed to create attendance session.';
+}
+
+async function ensureClassroomId(classId, requestedClassroomId, latitude, longitude) {
+  if (isUuid(requestedClassroomId)) {
+    const found = await pool.query(
+      'SELECT id FROM classrooms WHERE id = $1 AND class_id = $2 LIMIT 1',
+      [requestedClassroomId.trim(), classId],
+    );
+    if (found.rows.length) return found.rows[0].id;
+  }
+
+  const existing = await pool.query(
+    'SELECT id FROM classrooms WHERE class_id = $1 ORDER BY name, created_at LIMIT 1',
+    [classId],
+  );
+  if (existing.rows.length) return existing.rows[0].id;
+
+  const created = await pool.query(
+    `INSERT INTO classrooms (name, class_id, latitude, longitude, radius_meters)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    ['Default Classroom', classId, latitude, longitude, 100],
+  );
+  return created.rows[0].id;
+}
+
 async function expireStaleSessions() {
   await pool.query(
     `UPDATE attendance_sessions SET status = 'expired'
@@ -29,131 +66,134 @@ async function expireStaleSessions() {
 }
 
 async function createSession(req, res) {
-  await expireStaleSessions();
-  const {
-    classId,
-    subjectId,
-    classroomId,
-    durationMinutes,
-    latitude,
-    longitude,
-    radiusMeters,
-    accuracy,
-  } = req.body;
-  const duration = durationMinutes || config.defaultSessionDurationMinutes;
-  const radius = radiusMeters ?? DEFAULT_HOST_RADIUS_METERS;
-  const hostAccuracy = accuracy != null ? parseFloat(accuracy) : null;
-  const sessionUnits = intInRange(
-    req.body.sessionUnits ?? req.body.session_units ?? req.body.periodCount ?? req.body.blockPeriods,
-    1,
-    3,
-    1,
-  );
-
-  if (latitude == null || longitude == null) {
-    return res.status(400).json({
-      error: 'Teacher location is required. Enable GPS and try again.',
-    });
-  }
-
-  const subject = await pool.query(
-    'SELECT code, name, class_id FROM subjects WHERE id = $1',
-    [subjectId],
-  );
-  if (!subject.rows.length) {
-    return res.status(404).json({ error: 'Module/subject not found' });
-  }
-  if (subject.rows[0].class_id !== classId && req.user.role !== 'admin') {
-    return res.status(400).json({ error: 'Module does not belong to selected class' });
-  }
-
-  const sessionId = await generateSessionId(classId, subject.rows[0]?.code || classId);
-  const sessionToken = generateSessionToken();
-  const endsAt = new Date(Date.now() + duration * 60 * 1000);
-
-  const qrPayload = JSON.stringify({
-    sessionId,
-    sessionToken,
-    classId,
-    subjectId,
-    sessionUnits,
-    expiresAt: endsAt.toISOString(),
-  });
-  const qrDataUrl = await QRCode.toDataURL(qrPayload);
-
-  await pool.query(
-    `INSERT INTO attendance_sessions
-     (id, class_id, subject_id, teacher_id, classroom_id, session_token, duration_minutes, session_units,
-      ends_at, qr_payload, host_latitude, host_longitude, radius_meters, host_accuracy)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-    [
-      sessionId,
+  try {
+    await expireStaleSessions();
+    const {
       classId,
       subjectId,
-      req.user.id,
       classroomId,
-      sessionToken,
-      duration,
-      sessionUnits,
-      endsAt,
-      qrPayload,
+      durationMinutes,
       latitude,
       longitude,
-      radius,
-      hostAccuracy,
-    ],
-  );
+      radiusMeters,
+      accuracy,
+    } = req.body;
+    const duration = durationMinutes || config.defaultSessionDurationMinutes;
+    const radius = radiusMeters ?? DEFAULT_HOST_RADIUS_METERS;
+    const hostAccuracy = accuracy != null ? parseFloat(accuracy) : null;
+    const sessionUnits = intInRange(
+      req.body.sessionUnits ?? req.body.session_units ?? req.body.periodCount ?? req.body.blockPeriods,
+      1,
+      3,
+      1,
+    );
 
-  const classroom = await pool.query('SELECT * FROM classrooms WHERE id = $1', [classroomId]);
-  const classResult = await pool.query('SELECT name FROM classes WHERE id = $1', [classId]);
+    if (latitude == null || longitude == null) {
+      return res.status(400).json({
+        error: 'Teacher location is required. Enable GPS and try again.',
+      });
+    }
 
-  await logAudit(req.user.id, 'SESSION_STARTED', 'attendance_session', sessionId, {
-    sessionUnits,
-    classId,
-    subjectId,
-  });
+    const subject = await pool.query(
+      'SELECT code, name, class_id FROM subjects WHERE id = $1',
+      [subjectId],
+    );
+    if (!subject.rows.length) {
+      return res.status(404).json({ error: 'Module/subject not found' });
+    }
+    if (subject.rows[0].class_id !== classId && req.user.role !== 'admin') {
+      return res.status(400).json({ error: 'Module does not belong to selected class' });
+    }
 
-  const sessionPayload = {
-    id: sessionId,
-    sessionId,
-    sessionToken,
-    classId,
-    class_id: classId,
-    subjectId,
-    subject_id: subjectId,
-    durationMinutes: duration,
-    duration_minutes: duration,
-    sessionUnits,
-    session_units: sessionUnits,
-    startedAt: new Date().toISOString(),
-    endsAt: endsAt.toISOString(),
-    hostLatitude: latitude,
-    hostLongitude: longitude,
-    radiusMeters: radius,
-    className: classResult.rows[0]?.name || classId,
-    class_name: classResult.rows[0]?.name || classId,
-    subjectName: subject.rows[0]?.name || subjectId,
-    subject_name: subject.rows[0]?.name || subjectId,
-  };
+    const safeClassroomId = await ensureClassroomId(
+      classId,
+      classroomId,
+      latitude,
+      longitude,
+    );
 
-  if (req.io) {
-    req.io.to(`session:${sessionId}`).emit('session:started', sessionPayload);
-    req.io.to(`class:${classId}`).emit('session:started', sessionPayload);
+    const sessionId = await generateSessionId(classId, subject.rows[0]?.code || classId);
+    const sessionToken = generateSessionToken();
+    const endsAt = new Date(Date.now() + duration * 60 * 1000);
+
+    await pool.query(
+      `INSERT INTO attendance_sessions
+       (id, class_id, subject_id, teacher_id, classroom_id, session_token, duration_minutes, session_units,
+        ends_at, host_latitude, host_longitude, radius_meters, host_accuracy)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      [
+        sessionId,
+        classId,
+        subjectId,
+        req.user.id,
+        safeClassroomId,
+        sessionToken,
+        duration,
+        sessionUnits,
+        endsAt,
+        latitude,
+        longitude,
+        radius,
+        hostAccuracy,
+      ],
+    );
+
+    const classroom = await pool.query('SELECT * FROM classrooms WHERE id = $1', [safeClassroomId]);
+    const classResult = await pool.query('SELECT name FROM classes WHERE id = $1', [classId]);
+
+    await logAudit(req.user.id, 'SESSION_STARTED', 'attendance_session', sessionId, {
+      sessionUnits,
+      classId,
+      subjectId,
+    });
+
+    const sessionPayload = {
+      id: sessionId,
+      sessionId,
+      sessionToken,
+      classId,
+      class_id: classId,
+      subjectId,
+      subject_id: subjectId,
+      classroomId: safeClassroomId,
+      classroom_id: safeClassroomId,
+      durationMinutes: duration,
+      duration_minutes: duration,
+      sessionUnits,
+      session_units: sessionUnits,
+      startedAt: new Date().toISOString(),
+      endsAt: endsAt.toISOString(),
+      hostLatitude: latitude,
+      hostLongitude: longitude,
+      host_latitude: latitude,
+      host_longitude: longitude,
+      radiusMeters: radius,
+      radius_meters: radius,
+      className: classResult.rows[0]?.name || classId,
+      class_name: classResult.rows[0]?.name || classId,
+      subjectName: subject.rows[0]?.name || subjectId,
+      subject_name: subject.rows[0]?.name || subjectId,
+    };
+
+    if (req.io) {
+      req.io.to(`session:${sessionId}`).emit('session:started', sessionPayload);
+      req.io.to(`class:${classId}`).emit('session:started', sessionPayload);
+    }
+
+    return res.status(201).json({
+      ...sessionPayload,
+      status: 'active',
+      started_at: sessionPayload.startedAt,
+      ends_at: sessionPayload.endsAt,
+      classroom: classroom.rows[0],
+    });
+  } catch (err) {
+    console.error('Create session failed:', err);
+    return res.status(500).json({
+      error: pgErrorMessage(err),
+      code: err?.code,
+    });
   }
-
-  res.status(201).json({
-    ...sessionPayload,
-    status: 'active',
-    started_at: sessionPayload.startedAt,
-    ends_at: sessionPayload.endsAt,
-    qrPayload,
-    qr_payload: qrPayload,
-    qrDataUrl,
-    hostLatitude: latitude,
-    hostLongitude: longitude,
-    radiusMeters: radius,
-    classroom: classroom.rows[0],
-  });
 }
 
 async function getActiveSessions(req, res) {
@@ -203,24 +243,57 @@ async function updateSessionLocation(req, res) {
   if (latitude == null || longitude == null) {
     return res.status(400).json({ error: 'latitude and longitude required' });
   }
-  const result = await pool.query(
+
+  await expireStaleSessions();
+
+  const session = await pool.query(
+    `SELECT id, class_id, status, ends_at
+     FROM attendance_sessions
+     WHERE id = $1 AND teacher_id = $2
+     LIMIT 1`,
+    [sessionId, req.user.id],
+  );
+
+  if (!session.rows.length) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
+  const current = session.rows[0];
+  const isActive =
+    current.status === 'active' &&
+    current.ends_at != null &&
+    new Date(current.ends_at).getTime() > Date.now();
+
+  // The teacher screen sends GPS updates every few seconds. When the session
+  // expires while the page is still open, do not treat the final update as an
+  // API error. Return a clean response so the app can stop its timer silently.
+  if (!isActive) {
+    if (req.io) {
+      req.io.to(`session:${sessionId}`).emit('session:closed', { sessionId });
+      req.io.to(`class:${current.class_id}`).emit('session:closed', { sessionId });
+    }
+    return res.json({
+      ok: false,
+      active: false,
+      reason: 'Session is no longer active',
+    });
+  }
+
+  await pool.query(
     `UPDATE attendance_sessions
      SET host_latitude = $1, host_longitude = $2, host_accuracy = $3
-     WHERE id = $4 AND teacher_id = $5 AND status = 'active' AND ends_at > NOW()
-     RETURNING id, class_id`,
+     WHERE id = $4 AND teacher_id = $5`,
     [latitude, longitude, accuracy != null ? parseFloat(accuracy) : null, sessionId, req.user.id],
   );
-  if (!result.rows.length) {
-    return res.status(404).json({ error: 'Active session not found' });
-  }
+
   if (req.io) {
-    req.io.to(`class:${result.rows[0].class_id}`).emit('session:location-updated', {
+    req.io.to(`class:${current.class_id}`).emit('session:location-updated', {
       sessionId,
       latitude,
       longitude,
     });
   }
-  res.json({ ok: true });
+  res.json({ ok: true, active: true });
 }
 
 async function closeSession(req, res) {
@@ -265,6 +338,9 @@ async function getStudentActiveSessions(req, res) {
             s.host_latitude, s.host_longitude, s.radius_meters, s.host_accuracy,
             COALESCE(s.session_units, 1) AS session_units,
             c.name AS class_name, sub.name AS subject_name, u.full_name AS teacher_name,
+            cr.latitude AS room_lat, cr.longitude AS room_lon,
+            cr.radius_meters AS room_radius_meters,
+            cr.allowed_wifi_ssid AS wifi_ssid, cr.allowed_wifi_bssid AS wifi_bssid,
             (SELECT COUNT(*) FROM attendance_records ar
              WHERE ar.session_id = s.id AND ar.student_id = $1 AND ar.status <> 'REJECTED') AS already_marked
      FROM attendance_sessions s
@@ -272,6 +348,7 @@ async function getStudentActiveSessions(req, res) {
      JOIN subjects sub ON sub.id = s.subject_id
      JOIN users u ON u.id = s.teacher_id
      JOIN class_enrollments ce ON ce.class_id = s.class_id AND ce.student_id = $1
+     LEFT JOIN classrooms cr ON cr.id = s.classroom_id
      WHERE s.status = 'active' AND s.ends_at > NOW()
      ORDER BY s.started_at DESC`,
     [req.user.id],
@@ -317,25 +394,6 @@ async function getStudentActiveSessions(req, res) {
     sessions,
     enrolledClassIds: enrollments.rows.map((r) => r.class_id),
   });
-}
-
-async function validateQr(req, res) {
-  const { sessionId, sessionToken } = req.body;
-  await expireStaleSessions();
-  const result = await pool.query(
-    `SELECT s.*, cr.latitude AS room_lat, cr.longitude AS room_lon,
-            cr.radius_meters AS room_radius_meters,
-            cr.allowed_wifi_ssid, cr.allowed_wifi_bssid, cr.allowed_subnet,
-            COALESCE(s.session_units, 1) AS session_units
-     FROM attendance_sessions s
-     LEFT JOIN classrooms cr ON cr.id = s.classroom_id
-     WHERE s.id = $1 AND s.session_token = $2 AND s.status = 'active' AND s.ends_at > NOW()`,
-    [sessionId, sessionToken],
-  );
-  if (!result.rows.length) {
-    return res.status(400).json({ valid: false, error: 'Invalid or expired session' });
-  }
-  res.json({ valid: true, session: mapSessionForClient(result.rows[0]) });
 }
 
 async function getSessionAttendance(req, res) {
@@ -407,7 +465,6 @@ module.exports = {
   getSession,
   updateSessionLocation,
   closeSession,
-  validateQr,
   getSessionAttendance,
   getSessionRoster,
   expireStaleSessions,

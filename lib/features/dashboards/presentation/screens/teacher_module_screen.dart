@@ -33,7 +33,6 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
   bool _gpsValidation = true;
   bool _wifiValidation = true;
   bool _bluetoothValidation = true;
-  bool _qrBackup = true;
   bool _loading = false;
   bool _starting = false;
 
@@ -130,8 +129,6 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
           'ends_at': session.endsAt.toIso8601String(),
           'session_units': _sessionUnits,
           'sessionUnits': _sessionUnits,
-          'qrPayload': session.qrPayload,
-          'qr_payload': session.qrPayload,
         };
         await _load();
         if (mounted) context.push('/session/${session.id}', extra: extra);
@@ -563,7 +560,6 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
                       _ValidationChip(label: 'GPS', value: _gpsValidation, icon: Icons.my_location, onChanged: (v) => setState(() => _gpsValidation = v)),
                       _ValidationChip(label: 'WiFi', value: _wifiValidation, icon: Icons.wifi, onChanged: (v) => setState(() => _wifiValidation = v)),
                       _ValidationChip(label: 'BLE', value: _bluetoothValidation, icon: Icons.bluetooth, onChanged: (v) => setState(() => _bluetoothValidation = v)),
-                      _ValidationChip(label: 'QR', value: _qrBackup, icon: Icons.qr_code_2, onChanged: (v) => setState(() => _qrBackup = v)),
                     ],
                   ),
                   const SizedBox(height: 16),

@@ -8,14 +8,14 @@ class CatalogService {
     if (data is List) {
       return data.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
     }
-    if (data is Map && data['modules'] is List) {
-      return (data['modules'] as List).whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
-    }
-    if (data is Map && data['subjects'] is List) {
-      return (data['subjects'] as List).whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
-    }
-    if (data is Map && data['classes'] is List) {
-      return (data['classes'] as List).whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+    if (data is Map) {
+      for (final key in const ['modules', 'subjects', 'classes', 'data']) {
+        final value = data[key];
+        if (value is List) {
+          return value.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+        }
+        if (value is Map) return _mapList(value);
+      }
     }
     return <Map<String, dynamic>>[];
   }
@@ -73,6 +73,52 @@ class CatalogService {
       throw Exception(ApiClient.messageFromDio(e));
     } catch (_) {
       if (lastError != null) throw Exception(ApiClient.messageFromDio(lastError));
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+
+
+  /// Student dashboard module list.
+  ///
+  /// Shows only the modules/classes joined by the signed-in student. It tries a
+  /// few common route names so the Flutter UI can work with both the newer
+  /// module API and the older class-enrolment API.
+  Future<List<Map<String, dynamic>>> getStudentModules() async {
+    final attempts = <String>[
+      '/modules/student',
+      '/student/modules',
+      '/modules/enrolled',
+      '/classes/student',
+      '/classes/enrolled',
+      '/enrolments/modules',
+      '/enrollments/modules',
+    ];
+
+    DioException? lastError;
+    for (final path in attempts) {
+      try {
+        final res = await _api.dio.get(path);
+        final modules = _mapList(res.data);
+        if (modules.isNotEmpty) return modules;
+      } on DioException catch (e) {
+        lastError = e;
+        if (e.response?.statusCode != 404 && e.response?.statusCode != 405) {
+          throw Exception(ApiClient.messageFromDio(e));
+        }
+      }
+    }
+
+    // Final fallback for older backends: attendance/stats may already include
+    // per-module rows. We intentionally do not fall back to the overall total,
+    // because the dashboard must show joined modules, not one overall card.
+    try {
+      final res = await _api.dio.get('/attendance/stats');
+      return _mapList(res.data);
+    } on DioException catch (e) {
+      if (lastError != null) return <Map<String, dynamic>>[];
+      throw Exception(ApiClient.messageFromDio(e));
+    } catch (_) {
       return <Map<String, dynamic>>[];
     }
   }

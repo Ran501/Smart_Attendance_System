@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../../../../core/config/api_config.dart';
 import '../../../../core/constants/app_constants.dart';
@@ -26,7 +25,6 @@ class AttendanceSessionScreen extends StatefulWidget {
 class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   Map<String, dynamic>? _session;
   List<Map<String, dynamic>> _attendance = [];
-  String? _qrPayload;
   io.Socket? _socket;
   Timer? _locationTimer;
   final _geo = GeoFenceService();
@@ -46,31 +44,47 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
     _locationTimer = Timer.periodic(const Duration(seconds: 15), (_) => _refreshTeacherLocation());
   }
 
+  bool _isSessionExpiredLocally() {
+    final raw = _session?['ends_at'] ?? _session?['endsAt'];
+    if (raw == null) return false;
+    final endsAt = raw is DateTime ? raw : DateTime.tryParse(raw.toString());
+    if (endsAt == null) return false;
+    return DateTime.now().isAfter(endsAt);
+  }
+
   Future<void> _refreshTeacherLocation() async {
+    if (_isSessionExpiredLocally()) {
+      _locationTimer?.cancel();
+      return;
+    }
+
     try {
       final pos = await _geo.getBestPosition(maxSamples: 2);
       if (pos == null) return;
-      await AttendanceService().updateSessionLocation(
+      final stillActive = await AttendanceService().updateSessionLocation(
         sessionId: widget.sessionId,
         latitude: pos.latitude,
         longitude: pos.longitude,
         accuracy: pos.accuracy,
       );
-    } catch (_) {}
+      if (!stillActive) {
+        _locationTimer?.cancel();
+      }
+    } catch (_) {
+      // Keep the teacher screen usable even if one location refresh fails.
+    }
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final extra = GoRouterState.of(context).extra;
-    if (extra != null && _qrPayload == null) {
+    if (extra != null && _session == null) {
       if (extra is Map<String, dynamic>) {
         _session = extra;
-        _qrPayload = extra['qrPayload'] as String? ?? extra['qr_payload'] as String?;
       } else {
         try {
           final dynamic e = extra;
-          _qrPayload = e.qrPayload as String?;
           _session = {
             'id': e.id,
             'subject_name': e.subjectName,
@@ -115,6 +129,10 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
     _socket!.on('attendance:marked', (_) => _load());
     _socket!.on('attendance:updated', (_) => _load());
     _socket!.on('attendance:record-updated', (_) => _load());
+    _socket!.on('session:closed', (_) {
+      _locationTimer?.cancel();
+      _load();
+    });
   }
 
   @override
@@ -325,8 +343,8 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
                   StatusPill(label: 'Counts as ${_sessionUnits()} session${_sessionUnits() == 1 ? '' : 's'}', icon: Icons.calculate_outlined, color: const Color(0xFF8B5CF6)),
                   const SizedBox(height: 18),
                   ResponsiveGrid(
-                    minItemWidth: 135,
-                    childAspectRatio: 1.32,
+                    minItemWidth: 145,
+                    childAspectRatio: 1.0,
                     children: [
                       MetricTile(label: 'Present', value: '$_presentCount', icon: Icons.check_circle_outline, color: const Color(0xFF10B981)),
                       MetricTile(label: 'Absent', value: '$_absentCount', icon: Icons.cancel_outlined, color: const Color(0xFFEF4444)),
@@ -359,30 +377,6 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
                 ],
               ),
             ),
-            const SizedBox(height: 18),
-            if (_qrPayload != null)
-              GlassCard(
-                padding: const EdgeInsets.all(18),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.qr_code_2),
-                        const SizedBox(width: 10),
-                        Expanded(child: Text('QR Backup Attendance', style: Theme.of(context).textTheme.titleMedium)),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24)),
-                        child: QrImageView(data: _qrPayload!, version: QrVersions.auto, size: 220),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             const SizedBox(height: 22),
             SectionTitle(
               title: 'Student Attendance Records',
