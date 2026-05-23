@@ -1,6 +1,11 @@
 const bcrypt = require('bcryptjs');
 const pool = require('../database/pool');
 const { logAudit } = require('../services/auditService');
+const {
+  upsertSubjectPlan,
+  recordPlanAdjustment,
+  buildPlanPayload,
+} = require('../services/attendancePlanService');
 
 function clean(value) {
   return value == null ? '' : String(value).trim();
@@ -51,12 +56,23 @@ function moduleStatsPayload(row) {
   const officialLeave = Number(row.official_leave) || 0;
   const total = Number(row.total) || 0;
   const totalSessions = Number(row.total_sessions) || 0;
-  const attendancePercentage = total > 0 ? (present / total) * 100 : 0;
-  const absentRulePercentage = total > 0 ? ((total - absent) / total) * 100 : 0;
+  const attendancePercentage = total > 0 ? (present / total) * 100 : 100;
+  const afterOneMorePct = total > 0 ? (present / (total + 1)) * 100 : 100;
+  const absentRulePercentage = total > 0 ? ((total - absent) / total) * 100 : 100;
   const leaveRulePercentage = total > 0
     ? ((total - absent - medicalLeave - officialLeave) / total) * 100
-    : 0;
-  const safe = total === 0 ? true : absentRulePercentage >= 90 && leaveRulePercentage >= 80;
+    : 100;
+
+  const maxAllowedAbsences = Number(row.max_allowed_absences) || 0;
+  const absencesRemaining = Math.max(0, maxAllowedAbsences - absent);
+  const plannedSessions = Number(row.planned_session_count) || 0;
+
+  const alreadyBelow = attendancePercentage < 90;
+  const oneMoreDrops = attendancePercentage >= 90 && afterOneMorePct < 90;
+  const nearCap = absencesRemaining <= 1 && attendancePercentage >= 90 && maxAllowedAbsences > 0;
+  const atRisk = total > 0 && plannedSessions > 0 && (alreadyBelow || oneMoreDrops || nearCap);
+
+  const safe = total === 0 ? true : attendancePercentage >= 90 && leaveRulePercentage >= 80 && !atRisk;
 
   return {
     ...modulePayload(row),
@@ -79,8 +95,22 @@ function moduleStatsPayload(row) {
     attendancePercentage,
     absentRulePercentage: absentRulePercentage.toFixed(1),
     leaveRulePercentage: leaveRulePercentage.toFixed(1),
+    semesterTotalHours: row.semester_total_hours,
+    hoursPerWeek: row.hours_per_week != null ? Number(row.hours_per_week) : null,
+    plannedSessionCount: plannedSessions,
+    maxAllowedAbsences,
+    absencesRemaining,
+    extraClassesRecorded: row.extra_classes_recorded ?? 0,
+    cancelledClassesRecorded: row.cancelled_classes_recorded ?? 0,
+    atRisk,
     safe,
-    risk: total === 0 ? 'No sessions' : safe ? 'Low' : 'High',
+    risk: total === 0
+        ? 'No sessions'
+        : atRisk
+          ? 'High'
+          : safe
+            ? 'Low'
+            : 'Medium',
   };
 }
 
@@ -89,6 +119,8 @@ async function buildStudentModules(studentId) {
     `SELECT s.id AS subject_id, s.name AS subject_name, s.code, s.class_id,
             s.teacher_id, s.created_at, c.name AS class_name, c.department, c.semester,
             u.full_name AS teacher_name, (s.join_password_hash IS NOT NULL) AS has_join_password,
+            s.semester_total_hours, s.hours_per_week, s.planned_session_count, s.max_allowed_absences,
+            s.extra_classes_recorded, s.cancelled_classes_recorded,
             COUNT(DISTINCT ats.id) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW())::int AS total_sessions,
             COALESCE(SUM(COALESCE(ats.session_units, 1)) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW()), 0)::int AS total,
             COALESCE(SUM(COALESCE(ats.session_units, 1)) FILTER (WHERE ats.id IS NOT NULL AND ats.started_at <= NOW() AND ar.status = 'PRESENT'), 0)::int AS present,
@@ -105,7 +137,9 @@ async function buildStudentModules(studentId) {
      LEFT JOIN attendance_records ar ON ar.session_id = ats.id AND ar.student_id = ce.student_id
      WHERE ce.student_id = $1
      GROUP BY s.id, s.name, s.code, s.class_id, s.teacher_id, s.created_at,
-              c.name, c.department, c.semester, u.full_name, s.join_password_hash
+              c.name, c.department, c.semester, u.full_name, s.join_password_hash,
+              s.semester_total_hours, s.hours_per_week, s.planned_session_count, s.max_allowed_absences,
+              s.extra_classes_recorded, s.cancelled_classes_recorded
      ORDER BY s.created_at DESC, s.name ASC`,
     [studentId],
   );
@@ -430,6 +464,73 @@ async function getModuleSummary(req, res) {
   res.json({ moduleId, students: rows, generatedAt: new Date().toISOString() });
 }
 
+async function getAttendancePlan(req, res) {
+  const moduleId = clean(req.params.moduleId || req.params.subjectId);
+  const subject = await pool.query('SELECT teacher_id FROM subjects WHERE id = $1', [moduleId]);
+  if (!subject.rows.length) {
+    return res.status(404).json({ error: 'Module not found' });
+  }
+  if (req.user.role === 'teacher' && subject.rows[0].teacher_id !== req.user.id) {
+    return res.status(403).json({ error: 'Not your module' });
+  }
+
+  const payload = await buildPlanPayload(moduleId);
+  res.json(payload);
+}
+
+async function updateAttendancePlan(req, res) {
+  const moduleId = clean(req.params.moduleId || req.params.subjectId);
+  const semesterTotalHours = parseInt(req.body.semesterTotalHours ?? req.body.semester_total_hours, 10);
+  const hoursPerWeek = parseFloat(req.body.hoursPerWeek ?? req.body.hours_per_week);
+
+  if (!semesterTotalHours || semesterTotalHours < 1) {
+    return res.status(400).json({ error: 'semesterTotalHours must be at least 1' });
+  }
+  if (!hoursPerWeek || hoursPerWeek <= 0) {
+    return res.status(400).json({ error: 'hoursPerWeek must be greater than 0' });
+  }
+
+  const subject = await pool.query('SELECT teacher_id FROM subjects WHERE id = $1', [moduleId]);
+  if (!subject.rows.length) {
+    return res.status(404).json({ error: 'Module not found' });
+  }
+  if (req.user.role === 'teacher' && subject.rows[0].teacher_id !== req.user.id) {
+    return res.status(403).json({ error: 'Not your module' });
+  }
+
+  await upsertSubjectPlan(moduleId, { semesterTotalHours, hoursPerWeek });
+  const payload = await buildPlanPayload(moduleId);
+  res.json({ message: 'Attendance plan saved', plan: payload });
+}
+
+async function recordAttendanceAdjustment(req, res) {
+  const moduleId = clean(req.params.moduleId || req.params.subjectId);
+  const extra = parseInt(req.body.extraClasses ?? req.body.extra_classes ?? 0, 10) || 0;
+  const cancelled = parseInt(req.body.cancelledClasses ?? req.body.cancelled_classes ?? 0, 10) || 0;
+
+  if (extra < 0 || cancelled < 0) {
+    return res.status(400).json({ error: 'Adjustment counts cannot be negative' });
+  }
+  if (extra === 0 && cancelled === 0) {
+    return res.status(400).json({ error: 'Provide extraClasses or cancelledClasses' });
+  }
+
+  const subject = await pool.query('SELECT teacher_id FROM subjects WHERE id = $1', [moduleId]);
+  if (!subject.rows.length) {
+    return res.status(404).json({ error: 'Module not found' });
+  }
+  if (req.user.role === 'teacher' && subject.rows[0].teacher_id !== req.user.id) {
+    return res.status(403).json({ error: 'Not your module' });
+  }
+
+  await recordPlanAdjustment(moduleId, { extraClasses: extra, cancelledClasses: cancelled });
+  const payload = await buildPlanPayload(moduleId);
+  res.json({
+    message: 'Adjustment recorded (max absences unchanged)',
+    plan: payload,
+  });
+}
+
 module.exports = {
   listTeacherModules,
   listStudentModules,
@@ -439,4 +540,7 @@ module.exports = {
   getModuleSessions,
   getStudentModuleAttendance,
   getModuleSummary,
+  getAttendancePlan,
+  updateAttendancePlan,
+  recordAttendanceAdjustment,
 };

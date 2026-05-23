@@ -815,7 +815,17 @@ class _ModuleAttendanceCard extends StatelessWidget {
     final medical = _numValue(['medical_leave', 'medicalLeave']).toInt();
     final official = _numValue(['official_leave', 'officialLeave']).toInt();
     final absent = _numValue(['absent', 'rejected']).toInt();
-    final color = percentage >= 90 ? const Color(0xFF10B981) : percentage >= 80 ? const Color(0xFFF59E0B) : const Color(0xFFEF4444);
+    final maxAbsences = _numValue(['maxAllowedAbsences', 'max_allowed_absences']).toInt();
+    final absencesRemaining = _numValue(['absencesRemaining', 'absences_remaining'], -1).toInt();
+    final atRisk = data['atRisk'] == true || data['at_risk'] == true;
+    final riskLabel = (data['risk'] ?? (atRisk ? 'High' : percentage >= 90 ? 'Low' : percentage >= 80 ? 'Medium' : 'High')).toString();
+    final color = atRisk
+        ? const Color(0xFFF59E0B)
+        : percentage >= 90
+            ? const Color(0xFF10B981)
+            : percentage >= 80
+                ? const Color(0xFFF59E0B)
+                : const Color(0xFFEF4444);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -840,6 +850,24 @@ class _ModuleAttendanceCard extends StatelessWidget {
                 AttendanceLiquidGauge(percentage: percentage, size: 88, compact: true),
               ],
             ),
+            if (atRisk) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.35)),
+                ),
+                child: Text(
+                  maxAbsences > 0 && absencesRemaining >= 0
+                      ? 'Warning: ${percentage.toStringAsFixed(1)}% — one more absence may drop you below 90%. $absencesRemaining of $maxAbsences absences left.'
+                      : 'Warning: ${percentage.toStringAsFixed(1)}% — you are close to falling below 90%.',
+                  style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.w700, fontSize: 12),
+                ),
+              ),
+            ],
             const SizedBox(height: 14),
             ClipRRect(
               borderRadius: BorderRadius.circular(999),
@@ -854,7 +882,13 @@ class _ModuleAttendanceCard extends StatelessWidget {
                 _MiniCount(label: 'Medical', value: '$medical', color: const Color(0xFF3B82F6)),
                 _MiniCount(label: 'Official', value: '$official', color: const Color(0xFF8B5CF6)),
                 _MiniCount(label: 'Absent', value: '$absent', color: const Color(0xFFEF4444)),
-                _MiniCount(label: 'Risk', value: percentage >= 90 ? 'Low' : percentage >= 80 ? 'Medium' : 'High', color: color),
+                if (maxAbsences > 0)
+                  _MiniCount(
+                    label: 'Absences left',
+                    value: absencesRemaining >= 0 ? '$absencesRemaining/$maxAbsences' : '$maxAbsences max',
+                    color: absencesRemaining <= 1 ? const Color(0xFFF59E0B) : const Color(0xFF10B981),
+                  ),
+                _MiniCount(label: 'Risk', value: riskLabel, color: color),
               ],
             ),
           ],

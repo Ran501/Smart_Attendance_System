@@ -216,4 +216,53 @@ class CatalogService {
       'Module creation API is not available on the backend yet. Add one route that stores moduleId and password in your existing classes/modules table. Last error: ${lastError == null ? 'not found' : ApiClient.messageFromDio(lastError)}',
     );
   }
+
+  Future<Map<String, dynamic>> getAttendancePlan(String moduleId) async {
+    final res = await _api.dio.get('/modules/$moduleId/attendance-plan');
+    final data = res.data;
+    if (data is Map) return data.cast<String, dynamic>();
+    return <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> updateAttendancePlan({
+    required String moduleId,
+    required int semesterTotalHours,
+    required double hoursPerWeek,
+  }) async {
+    final res = await _api.dio.put(
+      '/modules/$moduleId/attendance-plan',
+      data: {
+        'semesterTotalHours': semesterTotalHours,
+        'hoursPerWeek': hoursPerWeek,
+      },
+    );
+    final data = res.data;
+    if (data is Map) {
+      final plan = data['plan'];
+      if (plan is Map) return plan.cast<String, dynamic>();
+      return data.cast<String, dynamic>();
+    }
+    return <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> recordAttendancePlanAdjustment({
+    required String moduleId,
+    int extraClasses = 0,
+    int cancelledClasses = 0,
+  }) async {
+    final res = await _api.dio.post(
+      '/modules/$moduleId/attendance-plan/adjustments',
+      data: {
+        if (extraClasses > 0) 'extraClasses': extraClasses,
+        if (cancelledClasses > 0) 'cancelledClasses': cancelledClasses,
+      },
+    );
+    final data = res.data;
+    if (data is Map) {
+      final plan = data['plan'];
+      if (plan is Map) return plan.cast<String, dynamic>();
+      return data.cast<String, dynamic>();
+    }
+    return <String, dynamic>{};
+  }
 }

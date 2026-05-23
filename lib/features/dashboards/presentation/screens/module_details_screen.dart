@@ -297,6 +297,18 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
     return (_presentCount / total) * 100;
   }
 
+  bool get _atRisk => module['atRisk'] == true || module['at_risk'] == true;
+
+  int get _maxAllowedAbsences {
+    final v = _numValue(module, const ['maxAllowedAbsences', 'max_allowed_absences'], -1).toInt();
+    return v >= 0 ? v : 0;
+  }
+
+  int get _absencesRemaining {
+    final v = _numValue(module, const ['absencesRemaining', 'absences_remaining'], -1).toInt();
+    return v >= 0 ? v : 0;
+  }
+
   String _dateOf(Map<String, dynamic> record) {
     final raw = record['marked_at'] ??
         record['markedAt'] ??
@@ -391,8 +403,36 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
                     children: [
                       StatusPill(label: 'Total Sessions: $_totalSessions', icon: Icons.event_note_outlined, color: const Color(0xFF1E4ED8)),
                       StatusPill(label: '${_percentage.toStringAsFixed(0)}% Attendance', icon: Icons.trending_up_outlined, color: color),
+                      if (_maxAllowedAbsences > 0)
+                        StatusPill(
+                          label: 'Absences left: $_absencesRemaining/$_maxAllowedAbsences',
+                          icon: Icons.event_busy_outlined,
+                          color: _absencesRemaining <= 1 ? const Color(0xFFF59E0B) : const Color(0xFF10B981),
+                        ),
                     ],
                   ),
+                  if (_atRisk) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.35)),
+                      ),
+                      child: Text(
+                        _maxAllowedAbsences > 0
+                            ? 'Your attendance is at ${_percentage.toStringAsFixed(1)}%. One more absence may drop you below 90%. You have $_absencesRemaining of $_maxAllowedAbsences allowed absences remaining.'
+                            : 'Your attendance is at ${_percentage.toStringAsFixed(1)}%. One more absence may drop you below 90%.',
+                        style: const TextStyle(
+                          color: Color(0xFFF59E0B),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

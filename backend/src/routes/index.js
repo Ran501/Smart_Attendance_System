@@ -67,6 +67,28 @@ router.get('/subjects/:subjectId/attendance', authenticate, authorize('student')
 router.get('/modules/:moduleId/attendance', authenticate, authorize('student'), moduleController.getStudentModuleAttendance);
 router.get('/classes/:classId/attendance', authenticate, authorize('student'), moduleController.getStudentModuleAttendance);
 router.get('/modules/:moduleId/summary', authenticate, moduleController.getModuleSummary);
+router.get(
+  '/modules/:moduleId/attendance-plan',
+  authenticate,
+  moduleController.getAttendancePlan,
+);
+router.put(
+  '/modules/:moduleId/attendance-plan',
+  authenticate,
+  authorize('teacher', 'admin'),
+  [
+    body('semesterTotalHours').isInt({ min: 1, max: 500 }),
+    body('hoursPerWeek').isFloat({ min: 0.5, max: 80 }),
+  ],
+  validate,
+  moduleController.updateAttendancePlan,
+);
+router.post(
+  '/modules/:moduleId/attendance-plan/adjustments',
+  authenticate,
+  authorize('teacher', 'admin'),
+  moduleController.recordAttendanceAdjustment,
+);
 
 // Sessions (teacher)
 router.post(

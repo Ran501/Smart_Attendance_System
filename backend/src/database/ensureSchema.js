@@ -24,6 +24,13 @@ async function ensureRuntimeSchema() {
      END $$;`,
     `ALTER TABLE subjects
        ADD COLUMN IF NOT EXISTS join_password_hash VARCHAR(255);`,
+    `ALTER TABLE subjects
+       ADD COLUMN IF NOT EXISTS semester_total_hours INTEGER,
+       ADD COLUMN IF NOT EXISTS hours_per_week NUMERIC(6,2),
+       ADD COLUMN IF NOT EXISTS planned_session_count INTEGER,
+       ADD COLUMN IF NOT EXISTS max_allowed_absences INTEGER,
+       ADD COLUMN IF NOT EXISTS extra_classes_recorded INTEGER DEFAULT 0,
+       ADD COLUMN IF NOT EXISTS cancelled_classes_recorded INTEGER DEFAULT 0;`,
     `ALTER TABLE attendance_sessions
        ADD COLUMN IF NOT EXISTS host_latitude DOUBLE PRECISION,
        ADD COLUMN IF NOT EXISTS host_longitude DOUBLE PRECISION,

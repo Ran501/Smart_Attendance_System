@@ -31,14 +31,20 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
   static const int _sessionsPerReportPage = 15;
 
   final _attendanceService = AttendanceService();
+  final _catalog = CatalogService();
+  final _semesterHoursController = TextEditingController();
+  final _hoursPerWeekController = TextEditingController();
 
   List<Map<String, dynamic>> _sessions = [];
+  Map<String, dynamic>? _attendancePlan;
   String? _moduleClassroomId;
   String _moduleClassroomName = '';
   int _durationMinutes = AppConstants.defaultSessionDurationMinutes;
   int _sessionUnits = 1;
   bool _loading = false;
   bool _starting = false;
+  bool _planSaving = false;
+  bool _planExpanded = true;
   final _realtime = RealtimeAttendanceSocket();
   Timer? _pollTimer;
 
@@ -56,6 +62,8 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
   void dispose() {
     _pollTimer?.cancel();
     _realtime.disconnect();
+    _semesterHoursController.dispose();
+    _hoursPerWeekController.dispose();
     super.dispose();
   }
 
@@ -70,9 +78,127 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
 
   Future<void> _loadQuiet() async {
     try {
-      final sessions = await _attendanceService.getModuleSessions(moduleId: _moduleId);
-      if (mounted) setState(() => _sessions = sessions);
+      final results = await Future.wait([
+        _attendanceService.getModuleSessions(moduleId: _moduleId),
+        _catalog.getAttendancePlan(_moduleId),
+      ]);
+      if (mounted) {
+        setState(() {
+          _sessions = List<Map<String, dynamic>>.from(results[0] as List);
+          _attendancePlan = results[1] as Map<String, dynamic>;
+        });
+        _syncPlanControllers();
+      }
     } catch (_) {}
+  }
+
+  void _syncPlanControllers() {
+    final plan = _attendancePlan;
+    if (plan == null) return;
+    final semester = plan['semesterTotalHours'] ?? plan['semester_total_hours'];
+    final perWeek = plan['hoursPerWeek'] ?? plan['hours_per_week'];
+    if (semester != null && _semesterHoursController.text.isEmpty) {
+      _semesterHoursController.text = semester.toString();
+    }
+    if (perWeek != null && _hoursPerWeekController.text.isEmpty) {
+      _hoursPerWeekController.text = perWeek.toString();
+    }
+  }
+
+  List<Map<String, dynamic>> get _atRiskStudents {
+    final raw = _attendancePlan?['atRiskStudents'] ?? _attendancePlan?['at_risk_students'];
+    if (raw is! List) return const [];
+    return raw.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  int get _maxAllowedAbsences {
+    final v = _attendancePlan?['maxAllowedAbsences'] ?? _attendancePlan?['max_allowed_absences'];
+    if (v is num) return v.toInt();
+    return int.tryParse(v?.toString() ?? '') ?? 0;
+  }
+
+  Future<void> _loadAttendancePlan() async {
+    try {
+      final plan = await _catalog.getAttendancePlan(_moduleId);
+      if (!mounted) return;
+      setState(() => _attendancePlan = plan);
+      final semester = plan['semesterTotalHours'] ?? plan['semester_total_hours'];
+      final perWeek = plan['hoursPerWeek'] ?? plan['hours_per_week'];
+      if (semester != null) _semesterHoursController.text = semester.toString();
+      if (perWeek != null) _hoursPerWeekController.text = perWeek.toString();
+    } catch (_) {
+      if (mounted) setState(() => _attendancePlan = null);
+    }
+  }
+
+  Future<void> _saveAttendancePlan() async {
+    final semester = int.tryParse(_semesterHoursController.text.trim());
+    final perWeek = double.tryParse(_hoursPerWeekController.text.trim());
+    if (semester == null || semester < 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter total semester hours (at least 1)')),
+      );
+      return;
+    }
+    if (perWeek == null || perWeek <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter hours per week (greater than 0)')),
+      );
+      return;
+    }
+
+    setState(() => _planSaving = true);
+    try {
+      final plan = await _catalog.updateAttendancePlan(
+        moduleId: _moduleId,
+        semesterTotalHours: semester,
+        hoursPerWeek: perWeek,
+      );
+      if (mounted) {
+        setState(() => _attendancePlan = plan);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Plan saved — max ${plan['maxAllowedAbsences'] ?? plan['max_allowed_absences']} absences allowed (90% rule)',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not save plan: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _planSaving = false);
+    }
+  }
+
+  Future<void> _recordPlanAdjustment({required int extra, required int cancelled}) async {
+    if (extra == 0 && cancelled == 0) return;
+    setState(() => _planSaving = true);
+    try {
+      final plan = await _catalog.recordAttendancePlanAdjustment(
+        moduleId: _moduleId,
+        extraClasses: extra,
+        cancelledClasses: cancelled,
+      );
+      if (mounted) {
+        setState(() => _attendancePlan = plan);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Class adjustment recorded — max absences unchanged')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Adjustment failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _planSaving = false);
+    }
   }
 
   String get _moduleId {
@@ -113,6 +239,8 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
     } catch (e) {
       sessionError = e.toString().replaceFirst('Exception: ', '');
     }
+
+    await _loadAttendancePlan();
 
     try {
       final classrooms = await CatalogService().getClassrooms(classId: _classId);
@@ -763,12 +891,16 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
                   const SizedBox(height: 12),
                   DropdownButtonFormField<int>(
                     isExpanded: true,
-                    value: _sessionUnits,
-                    decoration: const InputDecoration(labelText: 'Count this attendance as', prefixIcon: Icon(Icons.view_timeline_outlined)),
+                    initialValue: _sessionUnits,
+                    decoration: const InputDecoration(
+                      labelText: 'Session length (hours)',
+                      prefixIcon: Icon(Icons.view_timeline_outlined),
+                      helperText: '1 session = 1 hour • 2 sessions = 2 hours • 3 sessions = 3 hours',
+                    ),
                     items: const [
-                      DropdownMenuItem(value: 1, child: Text('1 Session')),
-                      DropdownMenuItem(value: 2, child: Text('2 Sessions')),
-                      DropdownMenuItem(value: 3, child: Text('3 Sessions')),
+                      DropdownMenuItem(value: 1, child: Text('1 Session (1 hour)')),
+                      DropdownMenuItem(value: 2, child: Text('2 Sessions / Double period (2 hours)')),
+                      DropdownMenuItem(value: 3, child: Text('3 Sessions / Block period (3 hours)')),
                     ],
                     onChanged: _starting ? null : (v) => setState(() => _sessionUnits = v ?? 1),
                   ),
@@ -792,9 +924,306 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
                 ],
               ),
             ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.04),
+            const SizedBox(height: 16),
+            _AttendancePlanCard(
+              expanded: _planExpanded,
+              onToggle: () => setState(() => _planExpanded = !_planExpanded),
+              semesterController: _semesterHoursController,
+              hoursPerWeekController: _hoursPerWeekController,
+              plan: _attendancePlan,
+              maxAllowedAbsences: _maxAllowedAbsences,
+              saving: _planSaving,
+              onSave: _saveAttendancePlan,
+              onExtraClass: () => _recordPlanAdjustment(extra: 1, cancelled: 0),
+              onCancelledClass: () => _recordPlanAdjustment(extra: 0, cancelled: 1),
+            ).animate().fadeIn(delay: 80.ms, duration: 400.ms).slideY(begin: 0.04),
+            const SizedBox(height: 16),
+            _AtRiskStudentsCard(
+              moduleName: _moduleName,
+              students: _atRiskStudents,
+              configured: _attendancePlan?['configured'] == true || _maxAllowedAbsences > 0,
+            ).animate().fadeIn(delay: 140.ms, duration: 400.ms).slideY(begin: 0.04),
             const SizedBox(height: 24),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _AttendancePlanCard extends StatelessWidget {
+  final bool expanded;
+  final VoidCallback onToggle;
+  final TextEditingController semesterController;
+  final TextEditingController hoursPerWeekController;
+  final Map<String, dynamic>? plan;
+  final int maxAllowedAbsences;
+  final bool saving;
+  final VoidCallback onSave;
+  final VoidCallback onExtraClass;
+  final VoidCallback onCancelledClass;
+
+  const _AttendancePlanCard({
+    required this.expanded,
+    required this.onToggle,
+    required this.semesterController,
+    required this.hoursPerWeekController,
+    required this.plan,
+    required this.maxAllowedAbsences,
+    required this.saving,
+    required this.onSave,
+    required this.onExtraClass,
+    required this.onCancelledClass,
+  });
+
+  int _intVal(dynamic v) {
+    if (v is num) return v.toInt();
+    return int.tryParse(v?.toString() ?? '') ?? 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final extra = _intVal(plan?['extraClassesRecorded'] ?? plan?['extra_classes_recorded']);
+    final cancelled = _intVal(plan?['cancelledClassesRecorded'] ?? plan?['cancelled_classes_recorded']);
+    final planned = _intVal(plan?['plannedSessionCount'] ?? plan?['planned_session_count']);
+
+    return GlassCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: onToggle,
+            borderRadius: BorderRadius.circular(12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('90% Attendance Plan', style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 4),
+                      Text(
+                        maxAllowedAbsences > 0
+                            ? 'Students may miss up to $maxAllowedAbsences session(s) and stay at or above 90%'
+                            : 'Set semester hours to calculate the absence allowance',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(expanded ? Icons.expand_less : Icons.expand_more),
+              ],
+            ),
+          ),
+          if (expanded) ...[
+            const SizedBox(height: 16),
+            TextField(
+              controller: semesterController,
+              keyboardType: TextInputType.number,
+              enabled: !saving,
+              decoration: const InputDecoration(
+                labelText: 'Total hours in semester',
+                hintText: 'e.g. 45',
+                prefixIcon: Icon(Icons.calendar_month_outlined),
+                helperText: 'Planned hours match session length: a double period counts as 2 hours, block as 3',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: hoursPerWeekController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              enabled: !saving,
+              decoration: const InputDecoration(
+                labelText: 'Hours per week',
+                hintText: 'e.g. 3',
+                prefixIcon: Icon(Icons.schedule_outlined),
+              ),
+            ),
+            if (planned > 0) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  StatusPill(
+                    label: '$planned planned sessions',
+                    icon: Icons.event_available_outlined,
+                    color: const Color(0xFF1E4ED8),
+                  ),
+                  StatusPill(
+                    label: 'Max absences: $maxAllowedAbsences',
+                    icon: Icons.warning_amber_outlined,
+                    color: const Color(0xFFF59E0B),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 14),
+            const SectionTitle(title: 'Schedule adjustments (optional)'),
+            const SizedBox(height: 6),
+            Text(
+              'Log extra or cancelled classes for your records. The max absence allowance does not change.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                StatusPill(label: 'Extra: $extra', icon: Icons.add_circle_outline, color: const Color(0xFF10B981)),
+                StatusPill(label: 'Cancelled: $cancelled', icon: Icons.remove_circle_outline, color: const Color(0xFFEF4444)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: saving ? null : onExtraClass,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Extra class'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: saving ? null : onCancelledClass,
+                    icon: const Icon(Icons.remove),
+                    label: const Text('No class'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            AppButton(
+              label: 'Save attendance plan',
+              icon: Icons.save_outlined,
+              loading: saving,
+              onPressed: saving ? null : onSave,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AtRiskStudentsCard extends StatelessWidget {
+  final String moduleName;
+  final List<Map<String, dynamic>> students;
+  final bool configured;
+
+  const _AtRiskStudentsCard({
+    required this.moduleName,
+    required this.students,
+    required this.configured,
+  });
+
+  double _pct(dynamic v) {
+    if (v is num) return v.toDouble();
+    return double.tryParse(v?.toString() ?? '') ?? 0;
+  }
+
+  String _name(Map<String, dynamic> s) =>
+      (s['studentName'] ?? s['student_name'] ?? s['full_name'] ?? s['name'] ?? 'Student').toString();
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.warning_amber_rounded, color: Color(0xFFF59E0B)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Attendance Alert', style: Theme.of(context).textTheme.titleLarge),
+                    Text(moduleName, style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              ),
+              if (students.isNotEmpty)
+                StatusPill(
+                  label: '${students.length} at risk',
+                  icon: Icons.person_outline,
+                  color: const Color(0xFFEF4444),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (!configured)
+            Text(
+              'Save an attendance plan above to track who is close to falling below 90%.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            )
+          else if (students.isEmpty)
+            Row(
+              children: [
+                Icon(Icons.check_circle_outline, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'No students are at risk right now.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+              ],
+            )
+          else
+            ...students.map((s) {
+              final pct = _pct(s['currentPct'] ?? s['current_pct']);
+              final remaining = s['absencesRemaining'] ?? s['absences_remaining'];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEF4444).withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.25)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(_name(s), style: Theme.of(context).textTheme.titleMedium),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${pct.toStringAsFixed(1)}% attendance'
+                              '${remaining != null ? ' • $remaining absence(s) left' : ''}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      Text(
+                        '${pct.toStringAsFixed(0)}%',
+                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                              color: const Color(0xFFF59E0B),
+                              fontWeight: FontWeight.w900,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+        ],
       ),
     );
   }
