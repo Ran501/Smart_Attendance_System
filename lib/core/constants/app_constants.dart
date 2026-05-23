@@ -18,6 +18,15 @@ class AppConstants {
   static const int bleMinimumRssi = -76;
   static const int bleScanSeconds = 8;
 
+  /// GPS geofence: base radius the teacher's session covers.
+  static const double hostSessionBaseRadiusMeters = 50;
+
+  /// Fixed buffer added on top of accuracy readings to absorb GPS drift.
+  static const double gpsFixedBufferMeters = 10;
+
+  /// Cap on the accuracy value used in radius calculation (avoid huge bubbles).
+  static const double maxAccuracyBufferMeters = 30;
+
   /// MobileFaceNet output (runtime-detected; 128 or 192 depending on model file).
   static const int embeddingSize = 192;
   static const String tfliteModelPath = 'assets/models/mobile_face_net.tflite';
