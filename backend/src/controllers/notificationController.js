@@ -11,6 +11,7 @@ async function registerToken(req, res) {
      ON CONFLICT (user_id, token) DO UPDATE SET updated_at = NOW()`,
     [req.user.id, token.trim()],
   );
+  console.log(`[FCM] Registered device token for user ${req.user.id}`);
   return res.json({ success: true });
 }
 

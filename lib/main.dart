@@ -13,7 +13,11 @@ import 'services/notification_service.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  await NotificationService.instance.ensureReadyForBackground();
+
+  // Show via our channel so sound + vibration always use attendance_alerts settings.
   await NotificationService.instance.showLocalNotification(message);
 }
 

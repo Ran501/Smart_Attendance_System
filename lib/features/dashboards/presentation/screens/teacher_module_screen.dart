@@ -890,8 +890,8 @@ class _StudentReportRow {
 
   String statusFor(String sessionId) => _statusBySession[sessionId] ?? 'ABSENT';
 
-  double get rule1Percentage => totalUnits == 0 ? 0 : (presentUnits / totalUnits) * 100;
+  double get rule1Percentage => totalUnits == 0 ? 0 : ((totalUnits - absentUnits)  / totalUnits) * 100;
 
   double get rule2Percentage =>
-      totalUnits == 0 ? 0 : ((totalUnits - absentUnits - medicalUnits - officialUnits) / totalUnits) * 100;
+      totalUnits == 0 ? 0 : ((totalUnits - (absentUnits + medicalUnits + officialUnits)) / totalUnits) * 100;
 }

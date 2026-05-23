@@ -3,22 +3,45 @@ const pool = require('../database/pool');
 
 let messaging = null;
 
+function loadServiceAccount() {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    try {
+      return JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+    } catch (err) {
+      console.error('[FCM] Invalid FIREBASE_SERVICE_ACCOUNT_JSON:', err.message);
+      return null;
+    }
+  }
+
+  const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+  if (!serviceAccountPath) return null;
+
+  try {
+    return require(path.resolve(serviceAccountPath));
+  } catch (err) {
+    console.error('[FCM] Cannot load service account file:', err.message);
+    return null;
+  }
+}
+
 function getMessaging() {
   if (messaging) return messaging;
 
-  const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
-  if (!serviceAccountPath) {
-    console.warn('[FCM] FIREBASE_SERVICE_ACCOUNT_PATH not set — push notifications disabled');
+  const serviceAccount = loadServiceAccount();
+  if (!serviceAccount) {
+    console.warn(
+      '[FCM] Push disabled — set FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON in backend/.env',
+    );
     return null;
   }
 
   try {
     const admin = require('firebase-admin');
     if (!admin.apps.length) {
-      const serviceAccount = require(path.resolve(serviceAccountPath));
       admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
     }
     messaging = admin.messaging();
+    console.log('[FCM] Firebase Admin initialized — system push enabled');
     return messaging;
   } catch (err) {
     console.error('[FCM] Failed to initialize Firebase Admin:', err.message);
@@ -42,35 +65,69 @@ async function getUserTokens(userId) {
   return result.rows.map((r) => r.token);
 }
 
+function buildFcmMessage({ token, type, title, body, data }) {
+  const dataPayload = {
+    type: String(type),
+    title: String(title),
+    body: String(body),
+    ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v ?? '')])),
+  };
+
+  return {
+    token,
+    notification: { title, body },
+    data: dataPayload,
+    android: {
+      priority: 'high',
+      notification: {
+        channelId: 'attendance_alerts',
+        sound: 'default',
+        defaultSound: true,
+        defaultVibrateTimings: true,
+        priority: 'high',
+        visibility: 'public',
+      },
+    },
+    apns: {
+      payload: {
+        aps: {
+          alert: { title, body },
+          sound: 'default',
+          badge: 1,
+        },
+      },
+    },
+  };
+}
+
 async function sendToUser(userId, { type, title, body, data = {} }) {
-  // Always save to DB so in-app bell shows it even without push
   await saveNotification(userId, { type, title, body, data });
 
   const fcm = getMessaging();
-  if (!fcm) return;
+  if (!fcm) return { pushed: false, reason: 'fcm_not_configured' };
 
   const tokens = await getUserTokens(userId);
-  if (!tokens.length) return;
-
-  const message = {
-    notification: { title, body },
-    data: { type, ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])) },
-    android: {
-      priority: 'high',
-      notification: { channelId: 'attendance_alerts', sound: 'default' },
-    },
-  };
+  if (!tokens.length) {
+    console.warn(`[FCM] No device token for user ${userId} — student must open app and log in`);
+    return { pushed: false, reason: 'no_token' };
+  }
 
   const staleTokens = [];
+  let sent = 0;
+
   await Promise.all(
     tokens.map(async (token) => {
       try {
-        await fcm.send({ ...message, token });
+        await fcm.send(buildFcmMessage({ token, type, title, body, data }));
+        sent += 1;
       } catch (err) {
-        if (err.code === 'messaging/registration-token-not-registered') {
+        if (
+          err.code === 'messaging/registration-token-not-registered' ||
+          err.code === 'messaging/invalid-registration-token'
+        ) {
           staleTokens.push(token);
         } else {
-          console.error('[FCM] Send error:', err.message);
+          console.error(`[FCM] Send error (user ${userId}):`, err.code, err.message);
         }
       }
     }),
@@ -82,11 +139,14 @@ async function sendToUser(userId, { type, title, body, data = {} }) {
       [userId, staleTokens],
     );
   }
+
+  if (sent > 0) {
+    console.log(`[FCM] Pushed "${title}" to user ${userId} (${sent} device(s))`);
+  }
+
+  return { pushed: sent > 0, sent };
 }
 
-/**
- * Notify all enrolled students in a class that a live attendance session started.
- */
 async function notifyClassSessionStarted(classId, session) {
   const students = await pool.query(
     `SELECT DISTINCT u.id
@@ -96,7 +156,10 @@ async function notifyClassSessionStarted(classId, session) {
     [classId],
   );
 
-  if (!students.rows.length) return;
+  if (!students.rows.length) {
+    console.warn(`[FCM] No enrolled students for class ${classId}`);
+    return;
+  }
 
   const subjectName =
     session.subjectName || session.subject_name || session.subject_code || 'Your module';
@@ -109,7 +172,7 @@ async function notifyClassSessionStarted(classId, session) {
     ? `${subjectName} (${className}) is live. Open FacePass to mark attendance within ${rangeM} m.`
     : `${subjectName} is live. Open FacePass to mark attendance within ${rangeM} m.`;
 
-  await Promise.all(
+  const results = await Promise.all(
     students.rows.map((row) =>
       sendToUser(row.id, {
         type: 'SESSION_STARTED',
@@ -125,8 +188,9 @@ async function notifyClassSessionStarted(classId, session) {
     ),
   );
 
+  const pushed = results.filter((r) => r.pushed).length;
   console.log(
-    `[FCM] Session started push queued for ${students.rows.length} student(s) (class ${classId})`,
+    `[FCM] Session ${sessionId}: in-app saved for ${students.rows.length} student(s), system push sent to ${pushed}`,
   );
 }
 
