@@ -217,11 +217,21 @@ class CatalogService {
     );
   }
 
+  String _encodedModulePath(String moduleId) =>
+      Uri.encodeComponent(moduleId.trim());
+
+  Map<String, dynamic> _planFromResponse(dynamic data) {
+    if (data is! Map) return <String, dynamic>{};
+    final map = data.cast<String, dynamic>();
+    final plan = map['plan'];
+    if (plan is Map) return plan.cast<String, dynamic>();
+    return map;
+  }
+
   Future<Map<String, dynamic>> getAttendancePlan(String moduleId) async {
-    final res = await _api.dio.get('/modules/$moduleId/attendance-plan');
-    final data = res.data;
-    if (data is Map) return data.cast<String, dynamic>();
-    return <String, dynamic>{};
+    final path = _encodedModulePath(moduleId);
+    final res = await _api.dio.get('/modules/$path/attendance-plan');
+    return _planFromResponse(res.data);
   }
 
   Future<Map<String, dynamic>> updateAttendancePlan({
@@ -229,40 +239,67 @@ class CatalogService {
     required int semesterTotalHours,
     required double hoursPerWeek,
   }) async {
-    final res = await _api.dio.put(
-      '/modules/$moduleId/attendance-plan',
-      data: {
-        'semesterTotalHours': semesterTotalHours,
-        'hoursPerWeek': hoursPerWeek,
-      },
-    );
-    final data = res.data;
-    if (data is Map) {
-      final plan = data['plan'];
-      if (plan is Map) return plan.cast<String, dynamic>();
-      return data.cast<String, dynamic>();
+    final path = _encodedModulePath(moduleId);
+    final payload = {
+      'semesterTotalHours': semesterTotalHours,
+      'hoursPerWeek': hoursPerWeek,
+    };
+
+    DioException? lastError;
+    for (final method in ['PUT', 'POST']) {
+      try {
+        final res = method == 'PUT'
+            ? await _api.dio.put('/modules/$path/attendance-plan', data: payload)
+            : await _api.dio.post('/modules/$path/attendance-plan', data: payload);
+        return _planFromResponse(res.data);
+      } on DioException catch (e) {
+        lastError = e;
+        final code = e.response?.statusCode;
+        if (method == 'PUT' && (code == 404 || code == 405 || code == 502 || code == 503)) {
+          continue;
+        }
+        throw Exception(ApiClient.messageFromDio(e));
+      }
+    }
+
+    if (lastError != null) {
+      throw Exception(ApiClient.messageFromDio(lastError));
     }
     return <String, dynamic>{};
   }
 
+  /// Log one extra class or one cancelled (no-class) session for teacher records.
   Future<Map<String, dynamic>> recordAttendancePlanAdjustment({
     required String moduleId,
     int extraClasses = 0,
     int cancelledClasses = 0,
+    String? type,
   }) async {
-    final res = await _api.dio.post(
-      '/modules/$moduleId/attendance-plan/adjustments',
-      data: {
-        if (extraClasses > 0) 'extraClasses': extraClasses,
-        if (cancelledClasses > 0) 'cancelledClasses': cancelledClasses,
-      },
-    );
-    final data = res.data;
-    if (data is Map) {
-      final plan = data['plan'];
-      if (plan is Map) return plan.cast<String, dynamic>();
-      return data.cast<String, dynamic>();
+    final path = _encodedModulePath(moduleId);
+    final payload = <String, dynamic>{
+      if (type != null && type.trim().isNotEmpty) 'type': type.trim(),
+      'extraClasses': extraClasses,
+      'cancelledClasses': cancelledClasses,
+    };
+
+    try {
+      final res = await _api.dio.post(
+        '/modules/$path/attendance-plan/adjustments',
+        data: payload,
+      );
+      final plan = _planFromResponse(res.data);
+      if (plan.isNotEmpty) return plan;
+      return getAttendancePlan(moduleId);
+    } on DioException catch (e) {
+      throw Exception(ApiClient.messageFromDio(e));
     }
-    return <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> logExtraClass(String moduleId) {
+    return recordAttendancePlanAdjustment(moduleId: moduleId, type: 'extra');
+  }
+
+  Future<Map<String, dynamic>> logCancelledClass(String moduleId) {
+    return recordAttendancePlanAdjustment(moduleId: moduleId, type: 'cancelled');
   }
 }

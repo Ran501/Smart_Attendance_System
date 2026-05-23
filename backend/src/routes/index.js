@@ -9,8 +9,28 @@ const attendanceController = require('../controllers/attendanceController');
 const analyticsController = require('../controllers/analyticsController');
 const moduleController = require('../controllers/moduleController');
 const notificationController = require('../controllers/notificationController');
+const { asyncHandler } = require('../utils/asyncHandler');
 
 const router = express.Router();
+
+const schedulePlanBodyRules = [
+  body('semesterTotalHours')
+    .custom((value) => {
+      const n = parseInt(value, 10);
+      if (Number.isNaN(n) || n < 1 || n > 500) {
+        throw new Error('semesterTotalHours must be between 1 and 500');
+      }
+      return true;
+    }),
+  body('hoursPerWeek')
+    .custom((value) => {
+      const n = parseFloat(value);
+      if (Number.isNaN(n) || n < 0.5 || n > 80) {
+        throw new Error('hoursPerWeek must be between 0.5 and 80');
+      }
+      return true;
+    }),
+];
 
 // Auth
 router.post(
@@ -70,24 +90,57 @@ router.get('/modules/:moduleId/summary', authenticate, moduleController.getModul
 router.get(
   '/modules/:moduleId/attendance-plan',
   authenticate,
-  moduleController.getAttendancePlan,
+  asyncHandler(moduleController.getAttendancePlan),
 );
 router.put(
   '/modules/:moduleId/attendance-plan',
   authenticate,
   authorize('teacher', 'admin'),
-  [
-    body('semesterTotalHours').isInt({ min: 1, max: 500 }),
-    body('hoursPerWeek').isFloat({ min: 0.5, max: 80 }),
-  ],
+  schedulePlanBodyRules,
   validate,
-  moduleController.updateAttendancePlan,
+  asyncHandler(moduleController.updateAttendancePlan),
 );
+router.post(
+  '/modules/:moduleId/attendance-plan',
+  authenticate,
+  authorize('teacher', 'admin'),
+  schedulePlanBodyRules,
+  validate,
+  asyncHandler(moduleController.updateAttendancePlan),
+);
+const scheduleAdjustmentRules = [
+  body('type')
+    .optional()
+    .isIn(['extra', 'extra_class', 'extra-class', 'cancelled', 'cancelled_class', 'cancelled-class', 'no_class', 'no-class', 'noclass']),
+  body('extraClasses')
+    .optional()
+    .custom((value) => {
+      if (value === undefined || value === null || value === '') return true;
+      const n = parseInt(value, 10);
+      if (Number.isNaN(n) || n < 0 || n > 200) {
+        throw new Error('extraClasses must be between 0 and 200');
+      }
+      return true;
+    }),
+  body('cancelledClasses')
+    .optional()
+    .custom((value) => {
+      if (value === undefined || value === null || value === '') return true;
+      const n = parseInt(value, 10);
+      if (Number.isNaN(n) || n < 0 || n > 200) {
+        throw new Error('cancelledClasses must be between 0 and 200');
+      }
+      return true;
+    }),
+];
+
 router.post(
   '/modules/:moduleId/attendance-plan/adjustments',
   authenticate,
   authorize('teacher', 'admin'),
-  moduleController.recordAttendanceAdjustment,
+  scheduleAdjustmentRules,
+  validate,
+  asyncHandler(moduleController.recordAttendanceAdjustment),
 );
 
 // Sessions (teacher)

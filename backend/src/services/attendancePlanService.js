@@ -49,18 +49,29 @@ async function upsertSubjectPlan(subjectId, { semesterTotalHours, hoursPerWeek }
 }
 
 async function recordPlanAdjustment(subjectId, { extraClasses = 0, cancelledClasses = 0 }) {
-  if (extraClasses > 0) {
-    await pool.query(
-      `UPDATE subjects SET extra_classes_recorded = COALESCE(extra_classes_recorded, 0) + $2 WHERE id = $1`,
-      [subjectId, extraClasses],
-    );
+  const extra = Math.max(0, parseInt(extraClasses, 10) || 0);
+  const cancelled = Math.max(0, parseInt(cancelledClasses, 10) || 0);
+  if (extra === 0 && cancelled === 0) {
+    const err = new Error('No adjustment amount provided');
+    err.status = 400;
+    throw err;
   }
-  if (cancelledClasses > 0) {
-    await pool.query(
-      `UPDATE subjects SET cancelled_classes_recorded = COALESCE(cancelled_classes_recorded, 0) + $2 WHERE id = $1`,
-      [subjectId, cancelledClasses],
-    );
+
+  const result = await pool.query(
+    `UPDATE subjects SET
+       extra_classes_recorded = COALESCE(extra_classes_recorded, 0) + $2,
+       cancelled_classes_recorded = COALESCE(cancelled_classes_recorded, 0) + $3
+     WHERE id = $1
+     RETURNING extra_classes_recorded, cancelled_classes_recorded`,
+    [subjectId, extra, cancelled],
+  );
+
+  if (!result.rows.length) {
+    const err = new Error('Module not found');
+    err.status = 404;
+    throw err;
   }
+
   return getSubjectPlan(subjectId);
 }
 
@@ -193,8 +204,19 @@ async function buildPlanPayload(subjectId) {
   const plan = await getSubjectPlan(subjectId);
   if (!plan) return null;
 
-  const { students: atRisk } = await getAtRiskStudentsForSubject(subjectId);
-  const lastSessionAt = await getLastSessionAt(subjectId);
+  let atRisk = [];
+  let lastSessionAt = null;
+  try {
+    const riskResult = await getAtRiskStudentsForSubject(subjectId);
+    atRisk = riskResult.students || [];
+  } catch (err) {
+    console.error('[attendance-plan] at-risk scan failed:', err.message);
+  }
+  try {
+    lastSessionAt = await getLastSessionAt(subjectId);
+  } catch (err) {
+    console.error('[attendance-plan] last session lookup failed:', err.message);
+  }
 
   return {
     subjectId,

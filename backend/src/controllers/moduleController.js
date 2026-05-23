@@ -11,6 +11,37 @@ function clean(value) {
   return value == null ? '' : String(value).trim();
 }
 
+function planDbError(res, err, action) {
+  console.error(`[schedule-plan] ${action} failed:`, err);
+  if (err.code === '42703') {
+    return res.status(503).json({
+      error: 'Database is missing schedule-plan columns. Restart the backend so migrations can run.',
+    });
+  }
+  return res.status(500).json({
+    error: err.message || `Could not ${action} schedule plan`,
+  });
+}
+
+async function resolveSubject(moduleKey) {
+  const key = clean(moduleKey);
+  if (!key) return null;
+
+  const byId = await pool.query(
+    'SELECT id, teacher_id, name FROM subjects WHERE id = $1',
+    [key],
+  );
+  if (byId.rows.length) return byId.rows[0];
+
+  const byCode = await pool.query(
+    'SELECT id, teacher_id, name FROM subjects WHERE UPPER(code) = UPPER($1) LIMIT 1',
+    [key],
+  );
+  if (byCode.rows.length) return byCode.rows[0];
+
+  return null;
+}
+
 function normalizeCode(value, fallback = 'MOD') {
   const raw = clean(value || fallback).toUpperCase();
   return raw.replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || fallback;
@@ -465,70 +496,106 @@ async function getModuleSummary(req, res) {
 }
 
 async function getAttendancePlan(req, res) {
-  const moduleId = clean(req.params.moduleId || req.params.subjectId);
-  const subject = await pool.query('SELECT teacher_id FROM subjects WHERE id = $1', [moduleId]);
-  if (!subject.rows.length) {
-    return res.status(404).json({ error: 'Module not found' });
-  }
-  if (req.user.role === 'teacher' && subject.rows[0].teacher_id !== req.user.id) {
-    return res.status(403).json({ error: 'Not your module' });
-  }
+  try {
+    const subject = await resolveSubject(req.params.moduleId || req.params.subjectId);
+    if (!subject) {
+      return res.status(404).json({ error: 'Module not found' });
+    }
+    if (req.user.role === 'teacher' && subject.teacher_id !== req.user.id) {
+      return res.status(403).json({ error: 'Not your module' });
+    }
 
-  const payload = await buildPlanPayload(moduleId);
-  res.json(payload);
+    const payload = await buildPlanPayload(subject.id);
+    return res.json(payload || { subjectId: subject.id, configured: false });
+  } catch (err) {
+    return planDbError(res, err, 'load');
+  }
 }
 
 async function updateAttendancePlan(req, res) {
-  const moduleId = clean(req.params.moduleId || req.params.subjectId);
-  const semesterTotalHours = parseInt(req.body.semesterTotalHours ?? req.body.semester_total_hours, 10);
-  const hoursPerWeek = parseFloat(req.body.hoursPerWeek ?? req.body.hours_per_week);
+  try {
+    const semesterTotalHours = parseInt(
+      req.body.semesterTotalHours ?? req.body.semester_total_hours,
+      10,
+    );
+    const hoursPerWeek = parseFloat(req.body.hoursPerWeek ?? req.body.hours_per_week);
 
-  if (!semesterTotalHours || semesterTotalHours < 1) {
-    return res.status(400).json({ error: 'semesterTotalHours must be at least 1' });
-  }
-  if (!hoursPerWeek || hoursPerWeek <= 0) {
-    return res.status(400).json({ error: 'hoursPerWeek must be greater than 0' });
-  }
+    if (!semesterTotalHours || semesterTotalHours < 1) {
+      return res.status(400).json({ error: 'semesterTotalHours must be at least 1' });
+    }
+    if (!hoursPerWeek || hoursPerWeek <= 0) {
+      return res.status(400).json({ error: 'hoursPerWeek must be greater than 0' });
+    }
 
-  const subject = await pool.query('SELECT teacher_id FROM subjects WHERE id = $1', [moduleId]);
-  if (!subject.rows.length) {
-    return res.status(404).json({ error: 'Module not found' });
-  }
-  if (req.user.role === 'teacher' && subject.rows[0].teacher_id !== req.user.id) {
-    return res.status(403).json({ error: 'Not your module' });
-  }
+    const subject = await resolveSubject(req.params.moduleId || req.params.subjectId);
+    if (!subject) {
+      return res.status(404).json({ error: 'Module not found' });
+    }
+    if (req.user.role === 'teacher' && subject.teacher_id !== req.user.id) {
+      return res.status(403).json({ error: 'Not your module' });
+    }
 
-  await upsertSubjectPlan(moduleId, { semesterTotalHours, hoursPerWeek });
-  const payload = await buildPlanPayload(moduleId);
-  res.json({ message: 'Attendance plan saved', plan: payload });
+    await upsertSubjectPlan(subject.id, { semesterTotalHours, hoursPerWeek });
+    const payload = await buildPlanPayload(subject.id);
+    return res.json({ message: 'Schedule plan saved', plan: payload });
+  } catch (err) {
+    return planDbError(res, err, 'save');
+  }
 }
 
 async function recordAttendanceAdjustment(req, res) {
-  const moduleId = clean(req.params.moduleId || req.params.subjectId);
-  const extra = parseInt(req.body.extraClasses ?? req.body.extra_classes ?? 0, 10) || 0;
-  const cancelled = parseInt(req.body.cancelledClasses ?? req.body.cancelled_classes ?? 0, 10) || 0;
+  try {
+    const subject = await resolveSubject(req.params.moduleId || req.params.subjectId);
+    if (!subject) {
+      return res.status(404).json({ error: 'Module not found' });
+    }
+    if (req.user.role === 'teacher' && subject.teacher_id !== req.user.id) {
+      return res.status(403).json({ error: 'Not your module' });
+    }
 
-  if (extra < 0 || cancelled < 0) {
-    return res.status(400).json({ error: 'Adjustment counts cannot be negative' });
-  }
-  if (extra === 0 && cancelled === 0) {
-    return res.status(400).json({ error: 'Provide extraClasses or cancelledClasses' });
-  }
+    let extra = parseInt(req.body.extraClasses ?? req.body.extra_classes ?? 0, 10) || 0;
+    let cancelled = parseInt(req.body.cancelledClasses ?? req.body.cancelled_classes ?? 0, 10) || 0;
 
-  const subject = await pool.query('SELECT teacher_id FROM subjects WHERE id = $1', [moduleId]);
-  if (!subject.rows.length) {
-    return res.status(404).json({ error: 'Module not found' });
-  }
-  if (req.user.role === 'teacher' && subject.rows[0].teacher_id !== req.user.id) {
-    return res.status(403).json({ error: 'Not your module' });
-  }
+    const type = clean(req.body.type ?? req.body.adjustmentType ?? req.body.adjustment_type).toLowerCase();
+    if (type === 'extra' || type === 'extra_class' || type === 'extra-class') {
+      extra += 1;
+    } else if (
+      type === 'cancelled'
+      || type === 'cancelled_class'
+      || type === 'cancelled-class'
+      || type === 'no_class'
+      || type === 'no-class'
+      || type === 'noclass'
+    ) {
+      cancelled += 1;
+    }
 
-  await recordPlanAdjustment(moduleId, { extraClasses: extra, cancelledClasses: cancelled });
-  const payload = await buildPlanPayload(moduleId);
-  res.json({
-    message: 'Adjustment recorded (max absences unchanged)',
-    plan: payload,
-  });
+    if (extra < 0 || cancelled < 0) {
+      return res.status(400).json({ error: 'Adjustment counts cannot be negative' });
+    }
+    if (extra === 0 && cancelled === 0) {
+      return res.status(400).json({
+        error: 'Send type "extra" or "cancelled", or extraClasses / cancelledClasses',
+      });
+    }
+
+    await recordPlanAdjustment(subject.id, { extraClasses: extra, cancelledClasses: cancelled });
+    const payload = await buildPlanPayload(subject.id);
+    return res.json({
+      message: 'Adjustment recorded (max absences unchanged)',
+      plan: payload,
+      extraClassesRecorded: payload?.extraClassesRecorded ?? payload?.extra_classes_recorded ?? 0,
+      cancelledClassesRecorded: payload?.cancelledClassesRecorded ?? payload?.cancelled_classes_recorded ?? 0,
+    });
+  } catch (err) {
+    if (err.status === 400) {
+      return res.status(400).json({ error: err.message });
+    }
+    if (err.status === 404) {
+      return res.status(404).json({ error: err.message });
+    }
+    return planDbError(res, err, 'adjust');
+  }
 }
 
 module.exports = {

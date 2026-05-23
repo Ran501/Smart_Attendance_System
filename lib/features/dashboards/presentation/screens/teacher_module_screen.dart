@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +10,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../services/attendance_service.dart';
+import '../../../../services/api_client.dart';
 import '../../../../services/catalog_service.dart';
 import '../../../../services/realtime_socket.dart';
 import '../../../../services/teacher_ble_beacon_service.dart';
@@ -44,7 +46,9 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
   bool _loading = false;
   bool _starting = false;
   bool _planSaving = false;
+  bool _adjustmentSaving = false;
   bool _planExpanded = true;
+  bool _planFieldsSynced = false;
   final _realtime = RealtimeAttendanceSocket();
   Timer? _pollTimer;
 
@@ -92,16 +96,15 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
     } catch (_) {}
   }
 
-  void _syncPlanControllers() {
+  void _syncPlanControllers({bool force = false}) {
     final plan = _attendancePlan;
     if (plan == null) return;
     final semester = plan['semesterTotalHours'] ?? plan['semester_total_hours'];
     final perWeek = plan['hoursPerWeek'] ?? plan['hours_per_week'];
-    if (semester != null && _semesterHoursController.text.isEmpty) {
-      _semesterHoursController.text = semester.toString();
-    }
-    if (perWeek != null && _hoursPerWeekController.text.isEmpty) {
-      _hoursPerWeekController.text = perWeek.toString();
+    if (force || !_planFieldsSynced) {
+      if (semester != null) _semesterHoursController.text = semester.toString();
+      if (perWeek != null) _hoursPerWeekController.text = perWeek.toString();
+      _planFieldsSynced = true;
     }
   }
 
@@ -155,19 +158,39 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
         hoursPerWeek: perWeek,
       );
       if (mounted) {
-        setState(() => _attendancePlan = plan);
+        setState(() {
+          _attendancePlan = plan;
+          _planExpanded = true;
+        });
+        _syncPlanControllers(force: true);
+        final maxAbs = plan['maxAllowedAbsences'] ?? plan['max_allowed_absences'] ?? 0;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Schedule plan saved — max $maxAbs absences allowed (90% rule)')),
+        );
+      }
+    } on DioException catch (e) {
+      if (mounted) {
+        final msg = ApiClient.messageFromDio(e);
+        final code = e.response?.statusCode;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Plan saved — max ${plan['maxAllowedAbsences'] ?? plan['max_allowed_absences']} absences allowed (90% rule)',
+              code == 502 || code == 503
+                  ? '$msg\nDeploy or restart the backend with the latest code, then try again.'
+                  : 'Could not save schedule plan: $msg',
             ),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 6),
           ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not save plan: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Could not save schedule plan: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
@@ -175,19 +198,47 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
     }
   }
 
-  Future<void> _recordPlanAdjustment({required int extra, required int cancelled}) async {
-    if (extra == 0 && cancelled == 0) return;
-    setState(() => _planSaving = true);
-    try {
-      final plan = await _catalog.recordAttendancePlanAdjustment(
-        moduleId: _moduleId,
-        extraClasses: extra,
-        cancelledClasses: cancelled,
+  Future<void> _recordPlanAdjustment({required bool extraClass}) async {
+    if (_moduleId.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Module ID missing — go back and open the module again')),
       );
+      return;
+    }
+
+    setState(() => _adjustmentSaving = true);
+    try {
+      final plan = extraClass
+          ? await _catalog.logExtraClass(_moduleId)
+          : await _catalog.logCancelledClass(_moduleId);
       if (mounted) {
         setState(() => _attendancePlan = plan);
+        final extra = plan['extraClassesRecorded'] ?? plan['extra_classes_recorded'] ?? 0;
+        final cancelled = plan['cancelledClassesRecorded'] ?? plan['cancelled_classes_recorded'] ?? 0;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Class adjustment recorded — max absences unchanged')),
+          SnackBar(
+            content: Text(
+              extraClass
+                  ? 'Extra class logged (total extra: $extra). Max absences unchanged.'
+                  : 'No-class logged (total cancelled: $cancelled). Max absences unchanged.',
+            ),
+          ),
+        );
+      }
+    } on DioException catch (e) {
+      if (mounted) {
+        final msg = ApiClient.messageFromDio(e);
+        final code = e.response?.statusCode;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              code == 502 || code == 503
+                  ? '$msg\nDeploy or restart the backend, then try again.'
+                  : 'Adjustment failed: $msg',
+            ),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     } catch (e) {
@@ -197,17 +248,15 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
         );
       }
     } finally {
-      if (mounted) setState(() => _planSaving = false);
+      if (mounted) setState(() => _adjustmentSaving = false);
     }
   }
 
   String get _moduleId {
-    return (widget.module['module_id'] ??
-            widget.module['moduleId'] ??
-            widget.module['subject_id'] ??
+    return (widget.module['subject_id'] ??
             widget.module['subjectId'] ??
-            widget.module['class_id'] ??
-            widget.module['classId'] ??
+            widget.module['module_id'] ??
+            widget.module['moduleId'] ??
             widget.module['id'] ??
             widget.module['code'] ??
             '')
@@ -933,9 +982,10 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
               plan: _attendancePlan,
               maxAllowedAbsences: _maxAllowedAbsences,
               saving: _planSaving,
+              adjustmentSaving: _adjustmentSaving,
               onSave: _saveAttendancePlan,
-              onExtraClass: () => _recordPlanAdjustment(extra: 1, cancelled: 0),
-              onCancelledClass: () => _recordPlanAdjustment(extra: 0, cancelled: 1),
+              onExtraClass: () => _recordPlanAdjustment(extraClass: true),
+              onCancelledClass: () => _recordPlanAdjustment(extraClass: false),
             ).animate().fadeIn(delay: 80.ms, duration: 400.ms).slideY(begin: 0.04),
             const SizedBox(height: 16),
             _AtRiskStudentsCard(
@@ -959,6 +1009,7 @@ class _AttendancePlanCard extends StatelessWidget {
   final Map<String, dynamic>? plan;
   final int maxAllowedAbsences;
   final bool saving;
+  final bool adjustmentSaving;
   final VoidCallback onSave;
   final VoidCallback onExtraClass;
   final VoidCallback onCancelledClass;
@@ -971,6 +1022,7 @@ class _AttendancePlanCard extends StatelessWidget {
     required this.plan,
     required this.maxAllowedAbsences,
     required this.saving,
+    required this.adjustmentSaving,
     required this.onSave,
     required this.onExtraClass,
     required this.onCancelledClass,
@@ -1001,12 +1053,12 @@ class _AttendancePlanCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('90% Attendance Plan', style: Theme.of(context).textTheme.titleLarge),
+                      Text('Schedule Plan', style: Theme.of(context).textTheme.titleLarge),
                       const SizedBox(height: 4),
                       Text(
                         maxAllowedAbsences > 0
-                            ? 'Students may miss up to $maxAllowedAbsences session(s) and stay at or above 90%'
-                            : 'Set semester hours to calculate the absence allowance',
+                            ? 'Students may miss up to $maxAllowedAbsences hour(s) and stay at or above 90%'
+                            : 'Add semester hours and hours per week, then save',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -1080,15 +1132,21 @@ class _AttendancePlanCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: saving ? null : onExtraClass,
-                    icon: const Icon(Icons.add),
+                    onPressed: saving || adjustmentSaving ? null : onExtraClass,
+                    icon: adjustmentSaving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.add),
                     label: const Text('Extra class'),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: saving ? null : onCancelledClass,
+                    onPressed: saving || adjustmentSaving ? null : onCancelledClass,
                     icon: const Icon(Icons.remove),
                     label: const Text('No class'),
                   ),
@@ -1097,7 +1155,7 @@ class _AttendancePlanCard extends StatelessWidget {
             ),
             const SizedBox(height: 14),
             AppButton(
-              label: 'Save attendance plan',
+              label: 'Save schedule plan',
               icon: Icons.save_outlined,
               loading: saving,
               onPressed: saving ? null : onSave,
@@ -1166,7 +1224,7 @@ class _AtRiskStudentsCard extends StatelessWidget {
           const SizedBox(height: 14),
           if (!configured)
             Text(
-              'Save an attendance plan above to track who is close to falling below 90%.',
+              'Save a schedule plan above to track who is close to falling below 90%.',
               style: Theme.of(context).textTheme.bodyMedium,
             )
           else if (students.isEmpty)
