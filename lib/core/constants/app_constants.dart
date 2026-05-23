@@ -10,15 +10,13 @@ class AppConstants {
   static const double faceMatchTop2Ratio = 0.96;
   static const int defaultSessionDurationMinutes = 5;
 
-  /// Existing backend radius is still used. BLE adds an extra proximity signal.
-  static const double hostSessionBaseRadiusMeters = 100;
-  static const double gpsFixedBufferMeters = 12;
-  static const double maxAccuracyBufferMeters = 20;
+  /// Attendance proximity: Bluetooth only (~15 m from teacher phone).
+  static const double bleMaxDistanceMeters = 15;
 
-  /// BLE RSSI thresholds. Stronger/less negative values mean closer proximity.
+  /// Stronger (less negative) RSSI = closer. ~-76 dBm ≈ 15 m for typical phones.
   static const int bleStrongRssi = -65;
-  static const int bleMinimumRssi = -78;
-  static const int bleScanSeconds = 5;
+  static const int bleMinimumRssi = -76;
+  static const int bleScanSeconds = 8;
 
   /// MobileFaceNet output (runtime-detected; 128 or 192 depending on model file).
   static const int embeddingSize = 192;

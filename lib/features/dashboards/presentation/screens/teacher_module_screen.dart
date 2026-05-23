@@ -117,23 +117,11 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
     }
     setState(() => _starting = true);
     try {
-      final position = await _geo.getBestPosition();
-      if (position == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enable GPS and wait for a fix before starting'), backgroundColor: Colors.orange));
-        }
-        return;
-      }
-
       final session = await _attendanceService.createSession(
         classId: _classId,
         subjectId: _moduleId,
         classroomId: _moduleClassroomId!,
-        latitude: position.latitude,
-        longitude: position.longitude,
-        accuracy: position.accuracy,
         durationMinutes: _durationMinutes,
-        radiusMeters: AppConstants.hostSessionBaseRadiusMeters.toInt(),
         sessionUnits: _sessionUnits,
       );
       if (mounted) {

@@ -9,7 +9,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../services/api_client.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/bluetooth_validation_service.dart';
-import '../../../../services/geo_fence_service.dart';
+import '../../../../services/teacher_ble_beacon_service.dart';
 import '../../../../services/report_service.dart';
 import '../../../../widgets/enterprise_shell.dart';
 import '../../../../widgets/session_timer.dart';
@@ -27,8 +27,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   Map<String, dynamic>? _session;
   List<Map<String, dynamic>> _attendance = [];
   io.Socket? _socket;
-  Timer? _locationTimer;
-  final _geo = GeoFenceService();
+  bool _beaconActive = false;
   final _updating = <String>{};
   bool _loading = false;
 
@@ -37,42 +36,24 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
     super.initState();
     _load();
     _connectSocket();
-    _startLocationRefresh();
+    _startBleBeacon();
   }
 
-  void _startLocationRefresh() {
-    _refreshTeacherLocation();
-    _locationTimer = Timer.periodic(const Duration(seconds: 15), (_) => _refreshTeacherLocation());
-  }
-
-  bool _isSessionExpiredLocally() {
-    final raw = _session?['ends_at'] ?? _session?['endsAt'];
-    if (raw == null) return false;
-    final endsAt = raw is DateTime ? raw : DateTime.tryParse(raw.toString());
-    if (endsAt == null) return false;
-    return DateTime.now().isAfter(endsAt);
-  }
-
-  Future<void> _refreshTeacherLocation() async {
-    if (_isSessionExpiredLocally()) {
-      _locationTimer?.cancel();
-      return;
-    }
-
-    try {
-      final pos = await _geo.getBestPosition(maxSamples: 2);
-      if (pos == null) return;
-      final stillActive = await AttendanceService().updateSessionLocation(
-        sessionId: widget.sessionId,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-        accuracy: pos.accuracy,
-      );
-      if (!stillActive) {
-        _locationTimer?.cancel();
+  Future<void> _startBleBeacon() async {
+    final ok = await TeacherBleBeaconService.instance.start(widget.sessionId);
+    if (mounted) {
+      setState(() => _beaconActive = ok);
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not start Bluetooth beacon. Enable Bluetooth and allow Nearby devices permission, then reopen this screen.',
+            ),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 6),
+          ),
+        );
       }
-    } catch (_) {
-      // Keep the teacher screen usable even if one location refresh fails.
     }
   }
 
@@ -135,15 +116,12 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
     _socket!.on('attendance:marked', (_) => _load());
     _socket!.on('attendance:updated', (_) => _load());
     _socket!.on('attendance:record-updated', (_) => _load());
-    _socket!.on('session:closed', (_) {
-      _locationTimer?.cancel();
-      _load();
-    });
+    _socket!.on('session:closed', (_) => _load());
   }
 
   @override
   void dispose() {
-    _locationTimer?.cancel();
+    TeacherBleBeaconService.instance.stop();
     _socket?.disconnect();
     _socket?.dispose();
     super.dispose();
@@ -342,7 +320,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   Widget build(BuildContext context) {
     final subject = _session?['subject_name'] ?? _session?['subjectName'] ?? 'Live Session';
     final className = _session?['class_name'] ?? _session?['className'] ?? _session?['class_id'] ?? 'Class';
-    final beaconName = BluetoothValidationService().teacherBeaconName(widget.sessionId);
+    final beaconName = BluetoothValidationService.beaconName(widget.sessionId);
 
     return EnterpriseScaffold(
       appBar: AppBar(
@@ -411,11 +389,20 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  Text('Students scan for a BLE beacon near the teacher/classroom before attendance is submitted.', style: Theme.of(context).textTheme.bodySmall),
+                  Text(
+                    _beaconActive
+                        ? 'Broadcasting now — students must be within 15 m of your phone to mark attendance.'
+                        : 'Beacon not active. Turn on Bluetooth and tap refresh, or reopen this session.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                   const SizedBox(height: 12),
                   SelectableText(beaconName, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
                   const SizedBox(height: 8),
-                  Text('Use this as the advertising name in your Android/iOS BLE peripheral broadcaster. The database/API remains unchanged.', style: Theme.of(context).textTheme.bodySmall),
+                  StatusPill(
+                    label: _beaconActive ? 'Beacon ON' : 'Beacon OFF',
+                    icon: Icons.bluetooth,
+                    color: _beaconActive ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                  ),
                 ],
               ),
             ),

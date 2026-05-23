@@ -3,7 +3,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../../../../core/config/api_config.dart';
@@ -14,7 +13,6 @@ import '../../../../services/api_client.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
 import '../../../../services/face_registration_service.dart';
-import '../../../../services/geo_fence_service.dart';
 import '../../../../widgets/app_brand_logo.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../widgets/enterprise_shell.dart';
@@ -36,8 +34,6 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
   bool _loadingSessions = false;
   io.Socket? _socket;
   Timer? _locationRefreshTimer;
-  final _geo = GeoFenceService();
-
   @override
   void initState() {
     super.initState();
@@ -106,16 +102,7 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     if (!mounted) return;
     setState(() => _loadingSessions = true);
     try {
-      Position? position;
-      try {
-        position = await _geo.getBestPosition(maxSamples: 3);
-      } catch (_) {}
-
-      final result = await AttendanceService().getStudentActiveSessions(
-        latitude: position?.latitude,
-        longitude: position?.longitude,
-        accuracy: position?.accuracy,
-      );
+      final result = await AttendanceService().getStudentActiveSessions();
       if (mounted) {
         setState(() {
           _activeSessions = result.sessions;
@@ -162,19 +149,6 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Register your face first (smile, up, down, right, left)'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    if (session['within_radius'] != true) {
-      final dist = session['distance_meters'] as num?;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(dist != null
-              ? 'Move closer to your teacher (${dist.toStringAsFixed(0)}m away)'
-              : 'Enable GPS and stand next to your teacher'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -505,6 +479,7 @@ class _StudentHero extends StatelessWidget {
         GlassCard(
           padding: const EdgeInsets.all(18),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               CircleAvatar(
                 radius: 28,
@@ -524,25 +499,43 @@ class _StudentHero extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '$greeting, ${name.split(' ').first}',
-                      style: Theme.of(context).textTheme.titleLarge,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      greeting,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: scheme.onSurface.withValues(alpha: 0.72),
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      name.trim().isEmpty ? 'Student' : name.trim(),
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            height: 1.2,
+                          ),
+                      softWrap: true,
                     ),
                     if (subtitle.trim().isNotEmpty) ...[
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 6),
                       Text(
-                        subtitle,
+                        subtitle.trim(),
                         style: Theme.of(context).textTheme.bodySmall,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                        softWrap: true,
                       ),
                     ],
                   ],
                 ),
               ),
-              if (faceRegistered)
-                Icon(Icons.verified_user, color: scheme.primary, size: 28),
+              if (faceRegistered) ...[
+                const SizedBox(width: 8),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Icon(
+                    Icons.verified_user,
+                    color: scheme.primary,
+                    size: 28,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -604,7 +597,6 @@ class _LiveSessionBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final within = session['within_radius'] == true;
     final marked = session['already_marked'] == true;
     final subject = (session['subject_name'] ?? session['subjectName'] ?? 'Active Class').toString();
     final teacher = (session['teacher_name'] ?? session['teacherName'] ?? session['teacher'] ?? 'Teacher').toString();
@@ -637,12 +629,12 @@ class _LiveSessionBanner extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               StatusPill(
-                label: marked ? 'Already Marked' : within ? 'Inside Range' : 'Move Closer',
-                icon: marked ? Icons.check_circle : within ? Icons.my_location : Icons.location_off_outlined,
-                color: marked ? const Color(0xFF10B981) : within ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                label: marked ? 'Already Marked' : 'Bluetooth ≤15 m at check-in',
+                icon: marked ? Icons.check_circle : Icons.bluetooth_searching,
+                color: marked ? const Color(0xFF10B981) : const Color(0xFF3B82F6),
               ),
               ElevatedButton.icon(
-                onPressed: marked || !within || loading ? null : onMark,
+                onPressed: marked || loading ? null : onMark,
                 icon: ClipOval(
                   child: Image.asset(
                     AppConstants.brandIconAsset,

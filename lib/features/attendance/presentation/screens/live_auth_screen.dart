@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:go_router/go_router.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 import '../../../../services/attendance_service.dart';
@@ -14,9 +13,7 @@ import '../../../../services/device_service.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../services/face_embedding_service.dart';
 import '../../../../services/face_registration_service.dart';
-import '../../../../services/geo_fence_service.dart';
 import '../../../../services/liveness_detection_service.dart';
-import '../../../../services/wifi_validation_service.dart';
 import '../../../../widgets/enterprise_shell.dart';
 import '../../../../widgets/natural_camera_preview.dart';
 
@@ -36,9 +33,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   final _embedding = FaceEmbeddingService();
   final _faceRegistration = FaceRegistrationService();
   final _liveness = LivenessDetectionService();
-  final _geo = GeoFenceService();
   final _device = DeviceService();
-  final _wifi = WifiValidationService();
   final _ble = BluetoothValidationService();
 
   List<LivenessChallenge> _challenges = [];
@@ -50,8 +45,6 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   double _progress = 0;
   bool _faceVerified = false;
   bool _bleVerified = false;
-  bool _wifiVerified = false;
-  bool _locationVerified = false;
   Uint8List? _identityCaptureBytes;
   Face? _identityCaptureFace;
 
@@ -216,78 +209,23 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
     return LivenessDetectionService.labelFor(challenge);
   }
 
-  bool _boolFromSession(
-    Map<String, dynamic> session,
-    List<String> keys, {
-    bool fallback = false,
-  }) {
-    for (final key in keys) {
-      final value = session[key];
-      if (value is bool) return value;
-      if (value is String) return value.toLowerCase() == 'true';
-    }
-    return fallback;
-  }
-
   Future<void> _submitAttendance(List<int> bytes, Face face) async {
     setState(() {
       _submitting = true;
-      _instruction = 'Running classroom security checks...';
+      _instruction = 'Scanning for teacher Bluetooth (within 15 m)...';
     });
 
     try {
-      final session = widget.sessionData['session'] as Map<String, dynamic>? ?? {};
-      final position = await _geo.getCurrentPosition();
-      if (position == null) {
-        _showResult(false, 'Could not get your location. Please enable GPS.');
-        return;
-      }
+      final sessionId = widget.sessionData['sessionId']?.toString() ?? '';
+      setState(() => _instruction = 'Scanning for teacher Bluetooth (within 15 m)...');
 
-      final geoOk = _geo.isInsideRadius(
-        studentLat: position.latitude,
-        studentLon: position.longitude,
-        centerLat: (session['latitude'] as num?)?.toDouble() ??
-            (session['host_latitude'] as num?)?.toDouble() ??
-            0,
-        centerLon: (session['longitude'] as num?)?.toDouble() ??
-            (session['host_longitude'] as num?)?.toDouble() ??
-            0,
-        radiusMeters: (session['radius_meters'] as num?)?.toDouble() ?? 100,
-      );
-      setState(() => _locationVerified = geoOk);
-      if (!geoOk) {
-        _showResult(false, 'Outside classroom geo-fence');
-        return;
-      }
-
-      final wifiInfo = await _wifi.getWifiInfo();
-      final wifiRequired = _boolFromSession(
-        session,
-        ['wifi_required', 'wifiRequired', 'wifi_enabled', 'wifiEnabled'],
-      );
-      final wifiOk = _wifi.validateWifi(
-        currentSsid: wifiInfo.ssid,
-        currentBssid: wifiInfo.bssid,
-        allowedSsid: session['wifi_ssid'] as String? ?? session['wifiSsid'] as String?,
-        allowedBssid: session['wifi_bssid'] as String? ?? session['wifiBssid'] as String?,
-      );
-      setState(() => _wifiVerified = wifiOk || !wifiRequired);
-      if (wifiRequired && !wifiOk) {
-        _showResult(false, 'Campus WiFi validation failed');
-        return;
-      }
-
-      final bleRequired = _boolFromSession(
-        session,
-        ['ble_required', 'bleRequired', 'bluetooth_required', 'bluetoothRequired'],
-      );
       final bleResult = await _ble.scanForTeacherBeacon(
-        sessionId: widget.sessionData['sessionId']?.toString() ?? '',
-        expectedDeviceId: session['ble_device_id'] as String? ?? session['bleDeviceId'] as String?,
-        expectedNamePrefix: session['ble_name_prefix'] as String? ?? session['bleNamePrefix'] as String?,
+        sessionId: sessionId,
+        expectedDeviceId: widget.sessionData['ble_device_id'] as String? ??
+            widget.sessionData['bleDeviceId'] as String?,
       );
-      setState(() => _bleVerified = bleResult.verified || !bleRequired);
-      if (bleRequired && !bleResult.verified) {
+      setState(() => _bleVerified = bleResult.verified);
+      if (!bleResult.verified) {
         _showResult(false, bleResult.message);
         return;
       }
@@ -329,15 +267,10 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         'sessionId': widget.sessionData['sessionId'],
         'sessionToken': widget.sessionData['sessionToken'],
         'liveEmbedding': embedding,
-        'latitude': position.latitude,
-        'longitude': position.longitude,
         'deviceId': deviceId,
         'deviceFingerprint': fingerprint,
         'livenessPassed': true,
         'livenessScore': 1.0,
-        'locationAccuracy': position.accuracy,
-        'wifiSsid': wifiInfo.ssid,
-        'wifiBssid': wifiInfo.bssid,
         ...bleResult.toJson(),
       });
 
@@ -483,9 +416,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
                   alignment: WrapAlignment.center,
                   children: [
                     _CheckChip(label: 'Face Live', done: _faceVerified),
-                    _CheckChip(label: 'Bluetooth', done: _bleVerified),
-                    _CheckChip(label: 'WiFi', done: _wifiVerified),
-                    _CheckChip(label: 'Location', done: _locationVerified),
+                    _CheckChip(label: 'Bluetooth ≤15 m', done: _bleVerified),
                   ],
                 ),
                 const SizedBox(height: 12),

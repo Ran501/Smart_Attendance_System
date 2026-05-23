@@ -1,6 +1,6 @@
 const pool = require('../database/pool');
 const config = require('../config');
-const { isInsideGeoFence, checkHostProximity, distanceMeters } = require('../utils/geo');
+const { validateBleProximity } = require('../utils/ble');
 const { evaluateFaceMatch } = require('../utils/face');
 const { logAudit, logFraud } = require('../services/auditService');
 const { expireStaleSessions } = require('./sessionController');
@@ -30,8 +30,10 @@ async function submitAttendance(req, res) {
     liveEmbedding,
     latitude,
     longitude,
-    wifiSsid,
-    wifiBssid,
+    bleVerified,
+    bleRssi,
+    bleDeviceId,
+    bleDeviceName,
     deviceId,
     deviceFingerprint,
     livenessPassed,
@@ -108,87 +110,28 @@ async function submitAttendance(req, res) {
     return res.status(403).json({ accepted: false, reason: 'Device verification failed' });
   }
 
-  const usesHostLocation = session.host_latitude != null && session.host_longitude != null;
-  const centerLat = usesHostLocation ? session.host_latitude : session.room_lat;
-  const centerLon = usesHostLocation ? session.host_longitude : session.room_lon;
-  const baseRadius = usesHostLocation ? session.radius_meters : session.room_radius_meters ?? 30;
-
-  let geoValid;
-  let distToHost;
-  let allowedRadius;
-
-  if (usesHostLocation) {
-    const proximity = checkHostProximity({
-      studentLat: latitude,
-      studentLon: longitude,
-      hostLat: centerLat,
-      hostLon: centerLon,
-      baseRadius,
-      hostAccuracy: session.host_accuracy,
-      studentAccuracy: locationAccuracy,
-    });
-    geoValid = proximity.valid;
-    distToHost = proximity.distance;
-    allowedRadius = proximity.allowedRadius;
-  } else {
-    distToHost = distanceMeters(latitude, longitude, centerLat, centerLon);
-    allowedRadius = baseRadius ?? 30;
-    geoValid = isInsideGeoFence(latitude, longitude, {
-      latitude: centerLat,
-      longitude: centerLon,
-      radius_meters: allowedRadius,
-    });
-  }
-
-  if (!geoValid) {
-    await logFraud(req.user.id, sessionId, 'GEO_FENCE_FAILED', {
-      latitude,
-      longitude,
-      distanceMeters: distToHost,
-      allowedRadius,
+  const bleCheck = validateBleProximity({ bleVerified, bleRssi });
+  if (!bleCheck.valid) {
+    await logFraud(req.user.id, sessionId, 'BLE_FAILED', {
+      bleRssi,
+      bleDeviceId,
+      bleDeviceName,
     });
     await recordRejected(session, req.user.id, latitude, longitude, 0, {
       geoValid: false,
       wifiValid: false,
       deviceValid: true,
       livenessPassed: livenessPassed || false,
-      reason: usesHostLocation
-        ? `Too far from teacher (${Math.round(distToHost)}m, allowed ~${Math.round(allowedRadius)}m)`
-        : 'Outside classroom geo-fence',
+      reason: bleCheck.reason,
     });
-    return res.status(403).json({
-      accepted: false,
-      reason: usesHostLocation
-        ? `Too far from teacher (${Math.round(distToHost)}m away, allowed ~${Math.round(allowedRadius)}m — stand closer or wait for GPS to settle)`
-        : 'Outside classroom area',
-      distanceMeters: distToHost,
-      allowedRadiusMeters: allowedRadius,
-    });
-  }
-
-  let wifiValid = true;
-  if (!usesHostLocation && session.allowed_wifi_ssid) {
-    wifiValid =
-      wifiSsid === session.allowed_wifi_ssid ||
-      (session.allowed_wifi_bssid && wifiBssid === session.allowed_wifi_bssid);
-  }
-  if (!wifiValid) {
-    await logFraud(req.user.id, sessionId, 'WIFI_FAILED', { wifiSsid });
-    await recordRejected(session, req.user.id, latitude, longitude, 0, {
-      geoValid: true,
-      wifiValid: false,
-      deviceValid: true,
-      livenessPassed: livenessPassed || false,
-      reason: 'Not on approved campus WiFi',
-    });
-    return res.status(403).json({ accepted: false, reason: 'WiFi validation failed' });
+    return res.status(403).json({ accepted: false, reason: bleCheck.reason });
   }
 
   if (!livenessPassed) {
     await logFraud(req.user.id, sessionId, 'LIVENESS_FAILED', { livenessScore });
     await recordRejected(session, req.user.id, latitude, longitude, 0, {
-      geoValid: true,
-      wifiValid: true,
+      geoValid: false,
+      wifiValid: false,
       deviceValid: true,
       livenessPassed: false,
       reason: 'Liveness detection failed',
@@ -231,8 +174,8 @@ async function submitAttendance(req, res) {
       minSimilarity: faceMatch.minSimilarity,
     });
     await recordRejected(session, req.user.id, latitude, longitude, matchScore, {
-      geoValid: true,
-      wifiValid: true,
+      geoValid: false,
+      wifiValid: false,
       deviceValid: true,
       livenessPassed: true,
       reason: `Face match below threshold (${(matchScore * 100).toFixed(1)}%)`,
@@ -253,7 +196,7 @@ async function submitAttendance(req, res) {
     `INSERT INTO attendance_records
      (session_id, class_id, student_id, status, match_confidence, latitude, longitude,
       geo_valid, wifi_valid, device_valid, liveness_passed)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, true, true)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, false, false, true, true)
      ON CONFLICT (session_id, student_id) DO UPDATE SET
        status = EXCLUDED.status,
        match_confidence = EXCLUDED.match_confidence,

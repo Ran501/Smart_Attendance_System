@@ -39,6 +39,7 @@ dependencies:
   crypto: ^3.0.6
 
   flutter_blue_plus: ^1.35.5
+  flutter_ble_peripheral: ^1.2.6
   fl_chart: ^0.69.2
   syncfusion_flutter_charts: ^28.2.9
   glassmorphism: ^3.0.0

@@ -88,12 +88,6 @@ async function createSession(req, res) {
       1,
     );
 
-    if (latitude == null || longitude == null) {
-      return res.status(400).json({
-        error: 'Teacher location is required. Enable GPS and try again.',
-      });
-    }
-
     const subject = await pool.query(
       'SELECT code, name, class_id FROM subjects WHERE id = $1',
       [subjectId],
@@ -147,10 +141,17 @@ async function createSession(req, res) {
       subjectId,
     });
 
+    const bleBeaconName = `FacePass-${sessionId}`;
+
     const sessionPayload = {
       id: sessionId,
       sessionId,
       sessionToken,
+      ble_required: true,
+      bleRequired: true,
+      ble_beacon_name: bleBeaconName,
+      bleBeaconName,
+      ble_max_distance_meters: 15,
       classId,
       class_id: classId,
       subjectId,
@@ -356,31 +357,15 @@ async function getStudentActiveSessions(req, res) {
 
   const sessions = result.rows.map((row) => {
     const mapped = mapSessionForClient(row);
-    let distMeters = null;
-    let withinRadius = null;
-    if (
-      studentLat != null &&
-      studentLon != null &&
-      row.host_latitude != null &&
-      row.host_longitude != null
-    ) {
-      const proximity = checkHostProximity({
-        studentLat,
-        studentLon,
-        hostLat: row.host_latitude,
-        hostLon: row.host_longitude,
-        baseRadius: row.radius_meters,
-        hostAccuracy: row.host_accuracy,
-        studentAccuracy,
-      });
-      distMeters = proximity.distance;
-      withinRadius = proximity.valid;
-      mapped.allowed_radius_meters = proximity.allowedRadius;
-    }
+    const beaconName = `FacePass-${row.id}`;
     return {
       ...mapped,
-      distance_meters: distMeters,
-      within_radius: withinRadius,
+      ble_required: true,
+      bleRequired: true,
+      ble_beacon_name: beaconName,
+      bleBeaconName: beaconName,
+      ble_max_distance_meters: 15,
+      within_radius: true,
       already_marked: parseInt(row.already_marked, 10) > 0,
     };
   });
