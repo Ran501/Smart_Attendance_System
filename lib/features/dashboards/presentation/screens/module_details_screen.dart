@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/auth_service.dart';
+import '../../../../services/catalog_service.dart';
+import '../../../../services/notification_service.dart';
 import '../../../../services/notification_service.dart';
 import '../../../../services/realtime_socket.dart';
 import '../../../../widgets/enterprise_shell.dart';
@@ -22,6 +24,7 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
   final _attendanceService = AttendanceService();
   List<Map<String, dynamic>> _records = [];
   List<Map<String, dynamic>> _sessions = [];
+  Map<String, dynamic> _moduleStats = {};
   bool _loading = false;
   String? _error;
   final _realtime = RealtimeAttendanceSocket();
@@ -61,18 +64,43 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
     _realtime.connect(
       classIds: classId != null ? [classId] : const [],
       studentUserId: user?.id,
-      onDataChanged: () {
-        if (mounted) _loadQuiet();
+      onDataChanged: () async {
+        if (mounted) await _loadQuiet();
+        await NotificationService.instance.pulseUnreadTray();
       },
-      onSessionStarted: (raw) {
+      onSessionStarted: (raw) async {
         if (raw is Map) {
-          NotificationService.instance.showSessionStartedFromPayload(
+          await NotificationService.instance.showSessionStartedFromPayload(
             Map<String, dynamic>.from(raw),
           );
         }
-        unreadCountNotifier.refresh();
+        await NotificationService.instance.pulseUnreadTray();
+      },
+      onSessionClosed: (_) {
+        if (mounted) _loadQuiet();
       },
     );
+  }
+
+  Future<void> _refreshModuleStats() async {
+    try {
+      final modules = await CatalogService().getStudentModules();
+      final id = _moduleId.trim().toLowerCase();
+      for (final row in modules) {
+        final keys = [
+          row['subject_id'],
+          row['subjectId'],
+          row['module_id'],
+          row['moduleId'],
+          row['id'],
+          row['code'],
+        ].whereType<Object>().map((e) => e.toString().trim().toLowerCase());
+        if (keys.contains(id)) {
+          if (mounted) setState(() => _moduleStats = row);
+          return;
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadQuiet() async {
@@ -83,9 +111,26 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
         final results = await Future.wait<dynamic>([
           _attendanceService.getStudentModuleRecords(moduleId: _moduleId),
           _attendanceService.getStudentModuleSessions(moduleId: _moduleId),
+          CatalogService().getStudentModules(),
         ]);
         records = List<Map<String, dynamic>>.from(results[0] as List);
         sessions = List<Map<String, dynamic>>.from(results[1] as List);
+        final modules = List<Map<String, dynamic>>.from(results[2] as List);
+        final id = _moduleId.trim().toLowerCase();
+        for (final row in modules) {
+          final keys = [
+            row['subject_id'],
+            row['subjectId'],
+            row['module_id'],
+            row['moduleId'],
+            row['id'],
+            row['code'],
+          ].whereType<Object>().map((e) => e.toString().trim().toLowerCase());
+          if (keys.contains(id)) {
+            _moduleStats = row;
+            break;
+          }
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -167,6 +212,7 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
           _records = records;
           _sessions = sessions;
         });
+        await _refreshModuleStats();
       }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -243,6 +289,11 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
 
   int _countStatus(String status) => _records.where((record) => _statusOf(record) == status).length;
 
+  bool get _hasLiveRecords => _records.isNotEmpty;
+
+  Map<String, dynamic> get _statsMap =>
+      _moduleStats.isNotEmpty ? <String, dynamic>{...module, ..._moduleStats} : module;
+
   Set<String> get _uniqueSessionIds {
     return _records
         .map((record) => (record['session_id'] ?? record['sessionId'] ?? record['session'] ?? '').toString())
@@ -251,25 +302,34 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
   }
 
   int get _presentCount {
-    final fromModule = _numValue(module, const ['attended', 'present', 'classesAttended'], -1).toInt();
+    if (_hasLiveRecords) return _countStatus('PRESENT');
+    final fromModule = _numValue(_statsMap, const ['attended', 'present', 'classesAttended'], -1).toInt();
     if (fromModule >= 0) return fromModule;
     return _countStatus('PRESENT');
   }
 
   int get _medicalCount {
-    final fromModule = _numValue(module, const ['medical_leave', 'medicalLeave'], -1).toInt();
+    if (_hasLiveRecords) return _countStatus('MEDICAL_LEAVE');
+    final fromModule = _numValue(_statsMap, const ['medical_leave', 'medicalLeave'], -1).toInt();
     if (fromModule >= 0) return fromModule;
     return _countStatus('MEDICAL_LEAVE');
   }
 
   int get _officialCount {
-    final fromModule = _numValue(module, const ['official_leave', 'officialLeave'], -1).toInt();
+    if (_hasLiveRecords) return _countStatus('OFFICIAL_LEAVE');
+    final fromModule = _numValue(_statsMap, const ['official_leave', 'officialLeave'], -1).toInt();
     if (fromModule >= 0) return fromModule;
     return _countStatus('OFFICIAL_LEAVE');
   }
 
   int get _absentCount {
-    final fromModule = _numValue(module, const ['absent', 'rejected'], -1).toInt();
+    if (_hasLiveRecords) {
+      return _records.where((record) {
+        final status = _statusOf(record);
+        return status == 'ABSENT' || status == 'REJECTED';
+      }).length;
+    }
+    final fromModule = _numValue(_statsMap, const ['absent', 'rejected'], -1).toInt();
     if (fromModule >= 0) return fromModule;
     return _records.where((record) {
       final status = _statusOf(record);
@@ -278,8 +338,10 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
   }
 
   int get _totalSessions {
+    if (_hasLiveRecords && _sessions.isNotEmpty) return _sessions.length;
+    if (_hasLiveRecords && _uniqueSessionIds.isNotEmpty) return _uniqueSessionIds.length;
     final fromModule = _numValue(
-      module,
+      _statsMap,
       const ['total_sessions', 'totalSessions', 'session_count', 'sessionCount', 'total', 'classesTotal', 'totalClasses'],
       -1,
     ).toInt();
@@ -290,22 +352,29 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
   }
 
   double get _percentage {
-    final fromModule = _numValue(module, const ['percentage', 'attendancePercentage', 'attendance_percentage'], -1);
+    if (_moduleStats.isNotEmpty) {
+      final fromStats = _numValue(_statsMap, const ['percentage', 'attendancePercentage', 'attendance_percentage'], -1);
+      if (fromStats >= 0) return fromStats;
+    }
+    if (_hasLiveRecords) {
+      final total = _totalSessions;
+      if (total <= 0) return 0;
+      return (_presentCount / total) * 100;
+    }
+    final fromModule = _numValue(_statsMap, const ['percentage', 'attendancePercentage', 'attendance_percentage'], -1);
     if (fromModule >= 0) return fromModule;
     final total = _totalSessions;
     if (total <= 0) return 0;
     return (_presentCount / total) * 100;
   }
 
-  bool get _atRisk => module['atRisk'] == true || module['at_risk'] == true;
-
   int get _maxAllowedAbsences {
-    final v = _numValue(module, const ['maxAllowedAbsences', 'max_allowed_absences'], -1).toInt();
+    final v = _numValue(_statsMap, const ['maxAllowedAbsences', 'max_allowed_absences'], -1).toInt();
     return v >= 0 ? v : 0;
   }
 
   int get _absencesRemaining {
-    final v = _numValue(module, const ['absencesRemaining', 'absences_remaining'], -1).toInt();
+    final v = _numValue(_statsMap, const ['absencesRemaining', 'absences_remaining'], -1).toInt();
     return v >= 0 ? v : 0;
   }
 
@@ -411,28 +480,6 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
                         ),
                     ],
                   ),
-                  if (_atRisk) ...[
-                    const SizedBox(height: 12),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.35)),
-                      ),
-                      child: Text(
-                        _maxAllowedAbsences > 0
-                            ? 'Your attendance is at ${_percentage.toStringAsFixed(1)}%. One more absence may drop you below 90%. You have $_absencesRemaining of $_maxAllowedAbsences allowed absences remaining.'
-                            : 'Your attendance is at ${_percentage.toStringAsFixed(1)}%. One more absence may drop you below 90%.',
-                        style: const TextStyle(
-                          color: Color(0xFFF59E0B),
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                  ],
                 ],
               ),
             ),

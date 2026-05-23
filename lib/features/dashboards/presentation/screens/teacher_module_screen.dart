@@ -74,7 +74,14 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
   void _connectRealtime() {
     _realtime.connect(
       classIds: [_classId],
-      onDataChanged: () {
+      onDataChanged: () async {
+        if (mounted) await _loadQuiet();
+        await NotificationService.instance.pulseUnreadTray();
+      },
+      onSessionStarted: (_) {
+        if (mounted) _loadQuiet();
+      },
+      onSessionClosed: (_) {
         if (mounted) _loadQuiet();
       },
     );
@@ -219,8 +226,8 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
           SnackBar(
             content: Text(
               extraClass
-                  ? 'Extra class logged (total extra: $extra). Max absences unchanged.'
-                  : 'No-class logged (total cancelled: $cancelled). Max absences unchanged.',
+                  ? 'Extra class logged'
+                  : 'No-class logged',
             ),
           ),
         );
@@ -756,98 +763,27 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
           minChildSize: 0.48,
           maxChildSize: 0.95,
           builder: (_, scrollController) {
-            return GlassCard(
-              radius: 30,
-              padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
-              child: ListView(
-                controller: scrollController,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 46,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.45),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: Icon(Icons.analytics_outlined, color: Theme.of(context).colorScheme.primary),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Module Analytics', style: Theme.of(context).textTheme.headlineSmall),
-                            const SizedBox(height: 3),
-                            Text(_moduleName, style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        onPressed: () => Navigator.of(sheetContext).pop(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      StatusPill(label: '${_sessions.length} Session Records', icon: Icons.event_note_outlined, color: const Color(0xFF1E4ED8)),
-                      StatusPill(label: '$_totalSessionUnits Counted Sessions', icon: Icons.calculate_outlined, color: const Color(0xFF10B981)),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  if (_loading)
-                    const Center(child: Padding(padding: EdgeInsets.all(28), child: CircularProgressIndicator()))
-                  else if (_sessions.isEmpty)
-                    const GlassCard(
-                      child: ListTile(
-                        leading: Icon(Icons.analytics_outlined),
-                        title: Text('No sessions yet for this module'),
-                      ),
-                    )
-                  else
-                    ..._sessions.map((s) => _ModuleSessionCard(
-                          session: s,
-                          sessionId: _sessionId(s),
-                          subject: _sessionModuleName(s),
-                          className: _sessionClassName(s),
-                          units: _unitsOf(s),
-                          present: _num(s, const ['present', 'present_count', 'presentCount']),
-                          rejected: _num(s, const ['rejected', 'rejected_count', 'rejectedCount']),
-                          onTap: () {
-                            Navigator.of(sheetContext).pop();
-                            _openSession(s);
-                          },
-                        )),
-                  const SizedBox(height: 14),
-                  AppButton(
-                    label: 'Summary / Print Report',
-                    icon: Icons.table_chart_outlined,
-                    onPressed: _loading
-                        ? null
-                        : () {
-                            Navigator.of(sheetContext).pop();
-                            Future<void>.delayed(const Duration(milliseconds: 120), () {
-                              if (mounted) _showSummarySheet();
-                            });
-                          },
-                  ),
-                ],
-              ),
+            return _LiveModuleAnalyticsSheet(
+              scrollController: scrollController,
+              moduleId: _moduleId,
+              moduleName: _moduleName,
+              classId: _classId,
+              attendanceService: _attendanceService,
+              sessionIdOf: _sessionId,
+              sessionModuleName: _sessionModuleName,
+              sessionClassName: _sessionClassName,
+              unitsOf: _unitsOf,
+              numOf: _num,
+              onOpenSession: (s) {
+                Navigator.of(sheetContext).pop();
+                _openSession(s);
+              },
+              onPrintSummary: () {
+                Navigator.of(sheetContext).pop();
+                Future<void>.delayed(const Duration(milliseconds: 120), () {
+                  if (mounted) _showSummarySheet();
+                });
+              },
             );
           },
         );
@@ -1112,7 +1048,7 @@ class _AttendancePlanCard extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 14),
-            const SectionTitle(title: 'Schedule adjustments (optional)'),
+            const SectionTitle(title: 'Schedule adjustments'),
             const SizedBox(height: 6),
             Text(
               'Log extra or cancelled classes for your records. The max absence allowance does not change.',
@@ -1244,6 +1180,7 @@ class _AtRiskStudentsCard extends StatelessWidget {
             ...students.map((s) {
               final pct = _pct(s['currentPct'] ?? s['current_pct']);
               final remaining = s['absencesRemaining'] ?? s['absences_remaining'];
+              final alreadyBelow = s['alreadyBelow'] == true || pct < 90;
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Container(
@@ -1262,8 +1199,10 @@ class _AtRiskStudentsCard extends StatelessWidget {
                             Text(_name(s), style: Theme.of(context).textTheme.titleMedium),
                             const SizedBox(height: 4),
                             Text(
-                              '${pct.toStringAsFixed(1)}% attendance'
-                              '${remaining != null ? ' • $remaining absence(s) left' : ''}',
+                              alreadyBelow
+                                  ? '${pct.toStringAsFixed(1)}% — below 90% requirement'
+                                  : '${pct.toStringAsFixed(1)}% — one more absence may drop below 90%'
+                                      '${remaining != null ? ' • $remaining absence(s) left' : ''}',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                           ],
@@ -1281,6 +1220,210 @@ class _AtRiskStudentsCard extends StatelessWidget {
                 ),
               );
             }),
+        ],
+      ),
+    );
+  }
+}
+
+class _LiveModuleAnalyticsSheet extends StatefulWidget {
+  final ScrollController scrollController;
+  final String moduleId;
+  final String moduleName;
+  final String classId;
+  final AttendanceService attendanceService;
+  final String Function(Map<String, dynamic>) sessionIdOf;
+  final String Function(Map<String, dynamic>) sessionModuleName;
+  final String Function(Map<String, dynamic>) sessionClassName;
+  final int Function(Map<String, dynamic>) unitsOf;
+  final int Function(Map<String, dynamic>, List<String>) numOf;
+  final void Function(Map<String, dynamic>) onOpenSession;
+  final VoidCallback onPrintSummary;
+
+  const _LiveModuleAnalyticsSheet({
+    required this.scrollController,
+    required this.moduleId,
+    required this.moduleName,
+    required this.classId,
+    required this.attendanceService,
+    required this.sessionIdOf,
+    required this.sessionModuleName,
+    required this.sessionClassName,
+    required this.unitsOf,
+    required this.numOf,
+    required this.onOpenSession,
+    required this.onPrintSummary,
+  });
+
+  @override
+  State<_LiveModuleAnalyticsSheet> createState() => _LiveModuleAnalyticsSheetState();
+}
+
+class _LiveModuleAnalyticsSheetState extends State<_LiveModuleAnalyticsSheet> {
+  final _realtime = RealtimeAttendanceSocket();
+  List<Map<String, dynamic>> _sessions = [];
+  bool _loading = true;
+  Timer? _pollTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _loadQuiet());
+    _realtime.connect(
+      classIds: [widget.classId],
+      onDataChanged: _loadQuiet,
+      onSessionStarted: (_) => _loadQuiet(),
+      onSessionClosed: (_) => _loadQuiet(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _realtime.disconnect();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    await _loadQuiet();
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _loadQuiet() async {
+    try {
+      final sessions = await widget.attendanceService.getModuleSessions(moduleId: widget.moduleId);
+      if (mounted) setState(() => _sessions = sessions);
+    } catch (_) {}
+  }
+
+  int get _totalSessionUnits => _sessions.fold<int>(0, (sum, s) => sum + widget.unitsOf(s));
+
+  List<Map<String, dynamic>> get _activeSessions => _sessions.where((s) {
+        final status = (s['status'] ?? '').toString().toLowerCase();
+        if (status == 'closed' || status == 'expired') return false;
+        if (status == 'active') return true;
+        final endsRaw = s['ends_at'] ?? s['endsAt'];
+        final ends = endsRaw is String ? DateTime.tryParse(endsRaw) : null;
+        return ends != null && ends.isAfter(DateTime.now());
+      }).toList();
+
+  List<Map<String, dynamic>> get _closedSessions => _sessions.where((s) {
+        final status = (s['status'] ?? '').toString().toLowerCase();
+        if (status == 'closed' || status == 'expired') return true;
+        final endsRaw = s['ends_at'] ?? s['endsAt'];
+        final ends = endsRaw is String ? DateTime.tryParse(endsRaw) : null;
+        return status != 'active' || (ends != null && !ends.isAfter(DateTime.now()));
+      }).toList();
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      radius: 30,
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
+      child: ListView(
+        controller: widget.scrollController,
+        children: [
+          Center(
+            child: Container(
+              width: 46,
+              height: 5,
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.45),
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Icon(Icons.analytics_outlined, color: Theme.of(context).colorScheme.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Module Analytics', style: Theme.of(context).textTheme.headlineSmall),
+                    const SizedBox(height: 3),
+                    Text(widget.moduleName, style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: _load,
+              ),
+              IconButton(
+                icon: const Icon(Icons.close_rounded),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              StatusPill(label: '${_sessions.length} Session Records', icon: Icons.event_note_outlined, color: const Color(0xFF1E4ED8)),
+              StatusPill(label: '$_totalSessionUnits Counted Sessions', icon: Icons.calculate_outlined, color: const Color(0xFF10B981)),
+              StatusPill(label: '${_activeSessions.length} Live', icon: Icons.fiber_manual_record, color: const Color(0xFFEF4444)),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (_loading)
+            const Center(child: Padding(padding: EdgeInsets.all(28), child: CircularProgressIndicator()))
+          else if (_sessions.isEmpty)
+            const GlassCard(
+              child: ListTile(
+                leading: Icon(Icons.analytics_outlined),
+                title: Text('No sessions yet for this module'),
+              ),
+            )
+          else ...[
+            if (_activeSessions.isNotEmpty) ...[
+              const SectionTitle(title: 'Live now'),
+              const SizedBox(height: 8),
+              ..._activeSessions.map((s) => _ModuleSessionCard(
+                    session: s,
+                    sessionId: widget.sessionIdOf(s),
+                    subject: widget.sessionModuleName(s),
+                    className: widget.sessionClassName(s),
+                    units: widget.unitsOf(s),
+                    present: widget.numOf(s, const ['present', 'present_count', 'presentCount']),
+                    rejected: widget.numOf(s, const ['rejected', 'rejected_count', 'rejectedCount']),
+                    onTap: () => widget.onOpenSession(s),
+                  )),
+              const SizedBox(height: 14),
+            ],
+            if (_closedSessions.isNotEmpty) ...[
+              const SectionTitle(title: 'Past sessions'),
+              const SizedBox(height: 8),
+              ..._closedSessions.map((s) => _ModuleSessionCard(
+                    session: s,
+                    sessionId: widget.sessionIdOf(s),
+                    subject: widget.sessionModuleName(s),
+                    className: widget.sessionClassName(s),
+                    units: widget.unitsOf(s),
+                    present: widget.numOf(s, const ['present', 'present_count', 'presentCount']),
+                    rejected: widget.numOf(s, const ['rejected', 'rejected_count', 'rejectedCount']),
+                    onTap: () => widget.onOpenSession(s),
+                  )),
+            ],
+          ],
+          const SizedBox(height: 14),
+          AppButton(
+            label: 'Summary / Print Report',
+            icon: Icons.table_chart_outlined,
+            onPressed: _loading ? null : widget.onPrintSummary,
+          ),
         ],
       ),
     );
@@ -1314,9 +1457,22 @@ class _ModuleSessionCard extends StatelessWidget {
     return null;
   }
 
+  String get _status => (session['status'] ?? '').toString().trim().toLowerCase();
+
+  bool get _isLive {
+    if (_status == 'closed' || _status == 'expired') return false;
+    if (_status == 'active') {
+      final ends = _endsAt();
+      return ends == null || ends.isAfter(DateTime.now());
+    }
+    final ends = _endsAt();
+    return ends != null && ends.isAfter(DateTime.now());
+  }
+
   @override
   Widget build(BuildContext context) {
     final endsAt = _endsAt();
+    final isLive = _isLive;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: GlassCard(
@@ -1336,6 +1492,11 @@ class _ModuleSessionCard extends StatelessWidget {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
+                      StatusPill(
+                        label: isLive ? 'Live' : (_status.isNotEmpty ? _status : 'Closed'),
+                        icon: isLive ? Icons.fiber_manual_record : Icons.check_circle_outline,
+                        color: isLive ? const Color(0xFFEF4444) : const Color(0xFF64748B),
+                      ),
                       StatusPill(label: 'Present: $present', icon: Icons.check_circle_outline, color: const Color(0xFF10B981)),
                       StatusPill(label: 'Rejected: $rejected', icon: Icons.gpp_bad_outlined, color: const Color(0xFFEF4444)),
                       StatusPill(label: 'Counts: $units', icon: Icons.calculate_outlined, color: const Color(0xFF8B5CF6)),
@@ -1345,7 +1506,10 @@ class _ModuleSessionCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            if (endsAt != null) SessionTimer(endsAt: endsAt) else const Icon(Icons.chevron_right_rounded),
+            if (isLive && endsAt != null)
+              SessionTimer(endsAt: endsAt)
+            else
+              const Icon(Icons.chevron_right_rounded),
           ],
         ),
       ),

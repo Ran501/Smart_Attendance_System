@@ -231,8 +231,25 @@ class NotificationService {
     switch (type) {
       case 'SESSION_STARTED':
         return 'Live attendance session';
+      case 'ATTENDANCE_WARNING':
+      case 'ATTENDANCE_DANGER':
+        return 'Attendance warning';
+      case 'TEACHER_ATTENDANCE_ALERT':
+        return 'Attendance alert';
       default:
         return null;
+    }
+  }
+
+  /// After realtime attendance events: refresh bell count and show tray if unread.
+  Future<void> pulseUnreadTray() async {
+    try {
+      await unreadCountNotifier.refresh();
+      if (unreadCountNotifier.value > 0) {
+        await alertLatestUnreadWithSound();
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Notify] pulseUnreadTray: $e');
     }
   }
 

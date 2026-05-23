@@ -11,6 +11,8 @@ import '../../../../services/attendance_service.dart';
 import '../../../../services/bluetooth_validation_service.dart';
 import '../../../../services/teacher_ble_beacon_service.dart';
 import '../../../../services/report_service.dart';
+import '../../../../widgets/app_button.dart';
+import '../../../../widgets/confirm_dialog.dart';
 import '../../../../widgets/enterprise_shell.dart';
 import '../../../../widgets/session_timer.dart';
 
@@ -30,6 +32,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   bool _beaconActive = false;
   final _updating = <String>{};
   bool _loading = false;
+  bool _closing = false;
 
   @override
   void initState() {
@@ -302,6 +305,38 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
     _attendance[idx] = updated;
   }
 
+  Future<void> _endSessionEarly() async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'End session early?',
+      message:
+          'Students will no longer be able to mark attendance for this session. You can start a new session later.',
+      confirmLabel: 'End session',
+      isDestructive: true,
+    );
+    if (!confirmed || !mounted) return;
+
+    setState(() => _closing = true);
+    try {
+      await AttendanceService().closeSession(widget.sessionId);
+      await TeacherBleBeaconService.instance.stop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Session ended')),
+        );
+        context.pop();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not end session: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _closing = false);
+    }
+  }
+
   Future<void> _changeStatus(Map<String, dynamic> record, String status) async {
     final key = _recordKey(record);
     setState(() => _updating.add(key));
@@ -377,6 +412,14 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
                   Text('$className • Session ID: ${widget.sessionId}', style: Theme.of(context).textTheme.bodySmall),
                   const SizedBox(height: 10),
                   StatusPill(label: 'Counts as ${_sessionUnits()} session${_sessionUnits() == 1 ? '' : 's'}', icon: Icons.calculate_outlined, color: const Color(0xFF8B5CF6)),
+                  const SizedBox(height: 14),
+                  AppButton(
+                    label: 'End session now',
+                    icon: Icons.stop_circle_outlined,
+                    outlined: true,
+                    loading: _closing,
+                    onPressed: _closing ? null : _endSessionEarly,
+                  ),
                 ],
               ),
             ).animate().fadeIn(duration: 450.ms).slideY(begin: 0.04),

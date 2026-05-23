@@ -9,8 +9,10 @@ import '../../../../core/providers/auth_provider.dart';
 import '../../../../models/attendance_session_model.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
+import '../../../../services/notification_service.dart';
 import '../../../../services/realtime_socket.dart';
 import '../../../../widgets/app_button.dart';
+import '../../../../widgets/confirm_dialog.dart';
 import '../../../../widgets/enterprise_shell.dart';
 
 class TeacherDashboardScreen extends ConsumerStatefulWidget {
@@ -58,9 +60,20 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
     _realtime.connect(
       classIds: classIds,
       onDataChanged: () {
+        if (mounted) _onAttendanceRealtime();
+      },
+      onSessionStarted: (_) {
+        if (mounted) _loadQuiet();
+      },
+      onSessionClosed: (_) {
         if (mounted) _loadQuiet();
       },
     );
+  }
+
+  Future<void> _onAttendanceRealtime() async {
+    await _loadQuiet();
+    await NotificationService.instance.pulseUnreadTray();
   }
 
   /// Refresh without full-screen loading spinner (socket / poll).
@@ -173,6 +186,14 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () async {
+              final confirmed = await showConfirmDialog(
+                context,
+                title: 'Log out?',
+                message: 'You will need to sign in again to use FacePass Bhutan.',
+                confirmLabel: 'Log out',
+                isDestructive: true,
+              );
+              if (!confirmed || !context.mounted) return;
               await ref.read(authStateProvider.notifier).logout();
               if (context.mounted) context.go('/login');
             },
@@ -400,6 +421,28 @@ class _CreateModuleSheetState extends State<_CreateModuleSheet> {
               ),
               const SizedBox(height: 18),
               AppButton(label: 'Create Module', icon: Icons.check_circle_outline, loading: _submitting, onPressed: _submit),
+              const SizedBox(height: 10),
+              OutlinedButton(
+                onPressed: _submitting
+                    ? null
+                    : () async {
+                        final hasInput = _moduleNameController.text.trim().isNotEmpty ||
+                            _moduleIdController.text.trim().isNotEmpty ||
+                            _passwordController.text.trim().isNotEmpty;
+                        if (hasInput) {
+                          final confirmed = await showConfirmDialog(
+                            context,
+                            title: 'Cancel creating module?',
+                            message: 'Unsaved module details will be discarded.',
+                            confirmLabel: 'Discard',
+                            isDestructive: true,
+                          );
+                          if (!confirmed || !context.mounted) return;
+                        }
+                        if (context.mounted) Navigator.of(context).pop();
+                      },
+                child: const Text('Cancel'),
+              ),
             ],
           ),
         );

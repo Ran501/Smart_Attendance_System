@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../services/api_client.dart';
+import '../../../../services/notification_service.dart';
 import '../../../../services/realtime_socket.dart';
 import '../../../../widgets/enterprise_shell.dart';
 
@@ -73,7 +74,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         .toSet();
     _realtime.connect(
       classIds: classIds,
-      onDataChanged: () {
+      onDataChanged: () async {
+        if (mounted && !_loading) await _loadQuiet();
+        await NotificationService.instance.pulseUnreadTray();
+      },
+      onSessionStarted: (_) {
+        if (mounted && !_loading) _loadQuiet();
+      },
+      onSessionClosed: (_) {
         if (mounted && !_loading) _loadQuiet();
       },
     );

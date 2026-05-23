@@ -10,27 +10,33 @@ const {
   THRESHOLD_PCT,
 } = require('./attendancePlanService');
 
+const ALERT_COOLDOWN_HOURS = 4;
+
+async function wasRecentlyNotified(userId, subjectId, types) {
+  const result = await pool.query(
+    `SELECT 1 FROM notifications
+     WHERE user_id = $1
+       AND type = ANY($2::text[])
+       AND (data->>'subjectId') = $3
+       AND created_at > NOW() - ($4::int * INTERVAL '1 hour')
+     LIMIT 1`,
+    [userId, types, String(subjectId), ALERT_COOLDOWN_HOURS],
+  );
+  return result.rows.length > 0;
+}
+
 async function notifyStudent(studentId, subjectId, subjectName, stats, risk) {
   const lastAt = await getLastSessionAt(subjectId);
   const nextHint = formatNextSessionHint(lastAt);
 
-  let type;
-  let title;
-  let body;
+  const type = risk.alreadyBelow ? 'ATTENDANCE_DANGER' : 'ATTENDANCE_WARNING';
+  const title = `Warning — Module: ${subjectName}`;
+  const body = risk.alreadyBelow
+    ? `Your attendance is at ${stats.currentPct.toFixed(1)}% — below the ${THRESHOLD_PCT}% requirement. Next session: ${nextHint}.`
+    : `Your attendance is at ${stats.currentPct.toFixed(1)}%. One more absence will drop you below ${THRESHOLD_PCT}%. Next session: ${nextHint}.`;
 
-  if (risk.alreadyBelow) {
-    type = 'ATTENDANCE_DANGER';
-    title = `Warning — Module: ${subjectName}`;
-    body =
-      `Your attendance is at ${stats.currentPct.toFixed(1)}% — below the ${THRESHOLD_PCT}% requirement. ` +
-      `Next session: ${nextHint}.`;
-  } else {
-    type = 'ATTENDANCE_WARNING';
-    title = `Warning — Module: ${subjectName}`;
-    body =
-      `Your attendance is at ${stats.currentPct.toFixed(1)}%. One more absence will drop you below ${THRESHOLD_PCT}%. ` +
-      `Next session: ${nextHint}.`;
-  }
+  const types = [type, 'ATTENDANCE_WARNING', 'ATTENDANCE_DANGER'];
+  if (await wasRecentlyNotified(studentId, subjectId, types)) return false;
 
   await sendToUser(studentId, {
     type,
@@ -43,6 +49,7 @@ async function notifyStudent(studentId, subjectId, subjectName, stats, risk) {
       nextPct: stats.afterOneMoreAbsentPct.toFixed(1),
     },
   });
+  return true;
 }
 
 async function notifyTeacherBatch(subjectId, subjectName, atRiskStudents) {
@@ -51,15 +58,18 @@ async function notifyTeacherBatch(subjectId, subjectName, atRiskStudents) {
     [subjectId],
   );
   const teacherId = teacherResult.rows[0]?.teacher_id;
-  if (!teacherId || !atRiskStudents.length) return;
+  if (!teacherId || !atRiskStudents.length) return false;
+
+  if (await wasRecentlyNotified(teacherId, subjectId, ['TEACHER_ATTENDANCE_ALERT'])) {
+    return false;
+  }
 
   const lastAt = await getLastSessionAt(subjectId);
+  const todayLabel = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   const lastLabel = lastAt
     ? new Date(lastAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
     : 'today';
-  const lastWord = lastLabel === new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-    ? 'today'
-    : lastLabel;
+  const lastWord = lastLabel === todayLabel ? 'today' : lastLabel;
 
   const names = atRiskStudents
     .slice(0, 8)
@@ -70,7 +80,7 @@ async function notifyTeacherBatch(subjectId, subjectName, atRiskStudents) {
   const title = `Attendance Alert — ${subjectName}`;
   const body =
     `${atRiskStudents.length} student${atRiskStudents.length === 1 ? '' : 's'} ` +
-    `are at risk of falling below ${THRESHOLD_PCT}%: ${names}${more}. Last session: ${lastWord}.`;
+    `are below or at risk of falling below ${THRESHOLD_PCT}%: ${names}${more}. Last session: ${lastWord}.`;
 
   await sendToUser(teacherId, {
     type: 'TEACHER_ATTENDANCE_ALERT',
@@ -81,15 +91,14 @@ async function notifyTeacherBatch(subjectId, subjectName, atRiskStudents) {
       count: String(atRiskStudents.length),
     },
   });
+  return true;
 }
 
 async function checkAndAlertStudent(studentId, subjectId) {
   const plan = await getSubjectPlan(subjectId);
-  if (!plan?.planned_session_count) return;
-
-  const subjectName = plan.name || 'your module';
+  const subjectName = plan?.name || 'your module';
   const stats = await getStudentSubjectStats(studentId, subjectId);
-  const risk = evaluateRisk(stats, plan);
+  const risk = evaluateRisk(stats, plan || {});
   if (!risk.atRisk) return;
 
   await notifyStudent(studentId, subjectId, subjectName, stats, risk);
@@ -97,10 +106,9 @@ async function checkAndAlertStudent(studentId, subjectId) {
 
 async function checkAllStudentsForSubject(subjectId) {
   const plan = await getSubjectPlan(subjectId);
-  if (!plan?.planned_session_count) return;
-
-  const subjectName = plan.name || 'Module';
+  const subjectName = plan?.name || 'Module';
   const { students: atRisk } = await getAtRiskStudentsForSubject(subjectId);
+  if (!atRisk.length) return;
 
   await Promise.allSettled(
     atRisk.map((s) =>
@@ -114,9 +122,10 @@ async function checkAllStudentsForSubject(subjectId) {
     ),
   );
 
-  if (atRisk.length > 0) {
-    await notifyTeacherBatch(subjectId, subjectName, atRisk);
-  }
+  await notifyTeacherBatch(subjectId, subjectName, atRisk);
 }
 
-module.exports = { checkAndAlertStudent, checkAllStudentsForSubject };
+module.exports = {
+  checkAndAlertStudent,
+  checkAllStudentsForSubject,
+};

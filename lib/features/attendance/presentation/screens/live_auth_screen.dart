@@ -14,6 +14,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../services/face_embedding_service.dart';
 import '../../../../services/face_registration_service.dart';
 import '../../../../services/liveness_detection_service.dart';
+import '../../../../widgets/confirm_dialog.dart';
 import '../../../../widgets/enterprise_shell.dart';
 import '../../../../widgets/natural_camera_preview.dart';
 
@@ -346,9 +347,39 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
             .clamp(0.0, 1.0)
             .toDouble();
 
-    return EnterpriseScaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final confirmed = await showConfirmDialog(
+          context,
+          title: 'Cancel attendance?',
+          message: 'Face verification will stop and your attendance will not be marked.',
+          confirmLabel: 'Leave',
+          isDestructive: true,
+        );
+        if (confirmed && context.mounted) {
+          Navigator.of(context).pop(false);
+        }
+      },
+      child: EnterpriseScaffold(
       appBar: AppBar(
         title: const Text('Live AI Verification'),
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded),
+          onPressed: () async {
+            final confirmed = await showConfirmDialog(
+              context,
+              title: 'Cancel attendance?',
+              message: 'Face verification will stop and your attendance will not be marked.',
+              confirmLabel: 'Leave',
+              isDestructive: true,
+            );
+            if (confirmed && context.mounted) {
+              Navigator.of(context).pop(false);
+            }
+          },
+        ),
         automaticallyImplyLeading: false,
       ),
       body: Column(
@@ -465,6 +496,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
           ).animate().fadeIn(duration: 350.ms).slideY(begin: 0.08),
         ],
       ),
+    ),
     );
   }
 }

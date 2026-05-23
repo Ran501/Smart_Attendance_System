@@ -75,28 +75,25 @@ async function recordPlanAdjustment(subjectId, { extraClasses = 0, cancelledClas
   return getSubjectPlan(subjectId);
 }
 
-async function getStudentSubjectStats(studentId, subjectId) {
-  const heldResult = await pool.query(
-    `SELECT COALESCE(SUM(COALESCE(s.session_units, 1)), 0)::int AS held_units
-     FROM attendance_sessions s
-     WHERE s.subject_id = $2 AND s.status IN ('closed', 'expired')`,
-    [studentId, subjectId],
-  );
-  const heldUnits = heldResult.rows[0]?.held_units ?? 0;
+const SESSION_HELD_FILTER = `s.subject_id = $2 AND s.started_at <= NOW()`;
 
+async function getStudentSubjectStats(studentId, subjectId) {
   const statusResult = await pool.query(
     `SELECT
-       COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE ar.status IN ('PRESENT', 'LATE')), 0)::int AS present_units,
+       COALESCE(SUM(COALESCE(s.session_units, 1)), 0)::int AS held_units,
+       COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE ar.status = 'PRESENT'), 0)::int AS present_units,
+       COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE ar.status = 'LATE'), 0)::int AS late_units,
        COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE COALESCE(ar.status, 'ABSENT') = 'ABSENT'), 0)::int AS absent_units,
        COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE ar.status = 'MEDICAL_LEAVE'), 0)::int AS medical_units,
        COALESCE(SUM(COALESCE(s.session_units, 1)) FILTER (WHERE ar.status = 'OFFICIAL_LEAVE'), 0)::int AS official_units
      FROM attendance_sessions s
      LEFT JOIN attendance_records ar ON ar.session_id = s.id AND ar.student_id = $1
-     WHERE s.subject_id = $2 AND s.status IN ('closed', 'expired')`,
+     WHERE ${SESSION_HELD_FILTER}`,
     [studentId, subjectId],
   );
 
   const row = statusResult.rows[0] || {};
+  const heldUnits = row.held_units ?? 0;
   const presentUnits = row.present_units ?? 0;
   const absentUnits = row.absent_units ?? 0;
 
@@ -107,6 +104,7 @@ async function getStudentSubjectStats(studentId, subjectId) {
   return {
     heldUnits,
     presentUnits,
+    lateUnits: row.late_units ?? 0,
     absentUnits,
     medicalUnits: row.medical_units ?? 0,
     officialUnits: row.official_units ?? 0,
@@ -139,7 +137,7 @@ async function getLastSessionAt(subjectId) {
 }
 
 function evaluateRisk(stats, plan) {
-  const maxAbsences = plan?.max_allowed_absences ?? 0;
+  const maxAbsences = Number(plan?.max_allowed_absences) || 0;
   const held = stats.heldUnits;
 
   if (held < MIN_HELD_UNITS_BEFORE_ALERT) {
@@ -147,11 +145,13 @@ function evaluateRisk(stats, plan) {
   }
 
   const alreadyBelow = stats.currentPct < THRESHOLD_PCT;
-  const oneMoreDropsBelow = stats.currentPct >= THRESHOLD_PCT && stats.afterOneMoreAbsentPct < THRESHOLD_PCT;
+  const oneMoreDropsBelow =
+    stats.currentPct >= THRESHOLD_PCT && stats.afterOneMoreAbsentPct < THRESHOLD_PCT;
   const absencesRemaining = Math.max(0, maxAbsences - stats.absentUnits);
-  const nearAbsenceCap = absencesRemaining <= 1 && stats.currentPct >= THRESHOLD_PCT;
+  const nearAbsenceCap = maxAbsences > 0 && absencesRemaining <= 1 && stats.currentPct >= THRESHOLD_PCT;
+  const noAbsencesLeft = maxAbsences > 0 && absencesRemaining <= 0;
 
-  const atRisk = alreadyBelow || oneMoreDropsBelow || nearAbsenceCap;
+  const atRisk = alreadyBelow || oneMoreDropsBelow || nearAbsenceCap || noAbsencesLeft;
 
   return {
     atRisk,
@@ -159,12 +159,12 @@ function evaluateRisk(stats, plan) {
     oneMoreDropsBelow,
     absencesRemaining,
     maxAbsences,
+    noAbsencesLeft,
   };
 }
 
 async function getAtRiskStudentsForSubject(subjectId) {
   const plan = await getSubjectPlan(subjectId);
-  if (!plan?.planned_session_count) return { plan: null, students: [] };
 
   const enrolled = await pool.query(
     `SELECT u.id AS student_id, u.full_name, u.student_id AS student_code

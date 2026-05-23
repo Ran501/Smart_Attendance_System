@@ -20,6 +20,7 @@ import '../../../../services/face_registration_service.dart';
 import '../../../../widgets/app_brand_logo.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../widgets/enterprise_shell.dart';
+import '../../../../widgets/confirm_dialog.dart';
 import '../../../../widgets/session_timer.dart';
 
 class StudentDashboardScreen extends ConsumerStatefulWidget {
@@ -46,8 +47,8 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
   @override
   void initState() {
     super.initState();
-    _load();
     _connectSocket();
+    _load();
     _proximitySub = _proximityMonitor.stream.listen(_onProximityUpdate);
     unreadCountNotifier.refresh();
     _sessionRefreshTimer =
@@ -103,25 +104,54 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
         _faceRegistered = registered;
         _joinedModules = joinedModules;
       });
+      _syncClassSubscriptions(joinedModules);
     }
     await _fetchSessionsFromApi();
+  }
+
+  void _syncClassSubscriptions(List<Map<String, dynamic>> modules) {
+    final ids = <String>{..._enrolledClassIds};
+    for (final m in modules) {
+      final classId = m['class_id'] ?? m['classId'];
+      if (classId != null && classId.toString().trim().isNotEmpty) {
+        ids.add(classId.toString());
+      }
+    }
+    _enrolledClassIds = ids.toList();
+    if (_socket?.connected == true) {
+      _joinClassRooms();
+    }
   }
 
   void _connectSocket() {
     _socket = io.io(ApiConfig.socketOrigin, io.OptionBuilder().setTransports(['websocket']).build());
     _socket!.connect();
-    _socket!.on('session:started', (dynamic raw) {
-      _fetchSessionsFromApi();
-      unreadCountNotifier.refresh();
+    _socket!.on('session:started', (dynamic raw) async {
+      if (_joinedModules.isNotEmpty) _joinClassRooms();
+      await _fetchSessionsFromApi();
       if (raw is Map) {
-        final payload = Map<String, dynamic>.from(raw);
-        NotificationService.instance.showSessionStartedFromPayload(payload);
+        await NotificationService.instance.showSessionStartedFromPayload(
+          Map<String, dynamic>.from(raw),
+        );
       }
+      await NotificationService.instance.pulseUnreadTray();
     });
-    _socket!.on('session:closed', (_) => _fetchSessionsFromApi());
-    _socket!.on('attendance:updated', (_) => _refreshDashboard());
-    _socket!.on('attendance:marked', (_) => _refreshDashboard());
-    _socket!.on('attendance:record-updated', (_) => _refreshDashboard());
+    _socket!.on('session:closed', (_) async {
+      await _fetchSessionsFromApi();
+      await _refreshDashboard();
+    });
+    _socket!.on('attendance:updated', (_) async {
+      await _refreshDashboard();
+      await NotificationService.instance.pulseUnreadTray();
+    });
+    _socket!.on('attendance:marked', (_) async {
+      await _refreshDashboard();
+      await NotificationService.instance.pulseUnreadTray();
+    });
+    _socket!.on('attendance:record-updated', (_) async {
+      await _refreshDashboard();
+      await NotificationService.instance.pulseUnreadTray();
+    });
     _joinStudentRoom();
   }
 
@@ -349,6 +379,14 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
             tooltip: 'Logout',
             icon: const Icon(Icons.logout),
             onPressed: () async {
+              final confirmed = await showConfirmDialog(
+                context,
+                title: 'Log out?',
+                message: 'You will need to sign in again to use FacePass Bhutan.',
+                confirmLabel: 'Log out',
+                isDestructive: true,
+              );
+              if (!confirmed || !context.mounted) return;
               await ref.read(authStateProvider.notifier).logout();
               if (context.mounted) context.go('/login');
             },
@@ -552,6 +590,27 @@ class _JoinModuleSheetState extends State<_JoinModuleSheet> {
               icon: Icons.login_rounded,
               loading: _loading,
               onPressed: _join,
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton(
+              onPressed: _loading
+                  ? null
+                  : () async {
+                      final hasInput =
+                          _moduleId.text.trim().isNotEmpty || _password.text.trim().isNotEmpty;
+                      if (hasInput) {
+                        final confirmed = await showConfirmDialog(
+                          context,
+                          title: 'Cancel joining?',
+                          message: 'Your module ID and password will be discarded.',
+                          confirmLabel: 'Discard',
+                          isDestructive: true,
+                        );
+                        if (!confirmed || !mounted) return;
+                      }
+                      if (mounted) Navigator.of(context).pop();
+                    },
+              child: const Text('Cancel'),
             ),
           ],
         ),
@@ -817,15 +876,12 @@ class _ModuleAttendanceCard extends StatelessWidget {
     final absent = _numValue(['absent', 'rejected']).toInt();
     final maxAbsences = _numValue(['maxAllowedAbsences', 'max_allowed_absences']).toInt();
     final absencesRemaining = _numValue(['absencesRemaining', 'absences_remaining'], -1).toInt();
-    final atRisk = data['atRisk'] == true || data['at_risk'] == true;
-    final riskLabel = (data['risk'] ?? (atRisk ? 'High' : percentage >= 90 ? 'Low' : percentage >= 80 ? 'Medium' : 'High')).toString();
-    final color = atRisk
-        ? const Color(0xFFF59E0B)
-        : percentage >= 90
-            ? const Color(0xFF10B981)
-            : percentage >= 80
-                ? const Color(0xFFF59E0B)
-                : const Color(0xFFEF4444);
+    final riskLabel = (data['risk'] ?? (percentage >= 90 ? 'Low' : percentage >= 80 ? 'Medium' : 'High')).toString();
+    final color = percentage >= 90
+        ? const Color(0xFF10B981)
+        : percentage >= 80
+            ? const Color(0xFFF59E0B)
+            : const Color(0xFFEF4444);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -850,24 +906,6 @@ class _ModuleAttendanceCard extends StatelessWidget {
                 AttendanceLiquidGauge(percentage: percentage, size: 88, compact: true),
               ],
             ),
-            if (atRisk) ...[
-              const SizedBox(height: 10),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.35)),
-                ),
-                child: Text(
-                  maxAbsences > 0 && absencesRemaining >= 0
-                      ? 'Warning: ${percentage.toStringAsFixed(1)}% — one more absence may drop you below 90%. $absencesRemaining of $maxAbsences absences left.'
-                      : 'Warning: ${percentage.toStringAsFixed(1)}% — you are close to falling below 90%.',
-                  style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.w700, fontSize: 12),
-                ),
-              ),
-            ],
             const SizedBox(height: 14),
             ClipRRect(
               borderRadius: BorderRadius.circular(999),

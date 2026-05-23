@@ -6,6 +6,7 @@ const {
   recordPlanAdjustment,
   buildPlanPayload,
 } = require('../services/attendancePlanService');
+const { checkAllStudentsForSubject } = require('../services/attendanceAlertService');
 
 function clean(value) {
   return value == null ? '' : String(value).trim();
@@ -101,7 +102,8 @@ function moduleStatsPayload(row) {
   const alreadyBelow = attendancePercentage < 90;
   const oneMoreDrops = attendancePercentage >= 90 && afterOneMorePct < 90;
   const nearCap = absencesRemaining <= 1 && attendancePercentage >= 90 && maxAllowedAbsences > 0;
-  const atRisk = total > 0 && plannedSessions > 0 && (alreadyBelow || oneMoreDrops || nearCap);
+  const noAbsencesLeft = maxAllowedAbsences > 0 && absencesRemaining <= 0;
+  const atRisk = total > 0 && (alreadyBelow || oneMoreDrops || nearCap || noAbsencesLeft);
 
   const safe = total === 0 ? true : attendancePercentage >= 90 && leaveRulePercentage >= 80 && !atRisk;
 
@@ -506,6 +508,9 @@ async function getAttendancePlan(req, res) {
     }
 
     const payload = await buildPlanPayload(subject.id);
+    checkAllStudentsForSubject(subject.id).catch((err) =>
+      console.error('[alert] plan load recheck failed:', err.message),
+    );
     return res.json(payload || { subjectId: subject.id, configured: false });
   } catch (err) {
     return planDbError(res, err, 'load');
@@ -537,6 +542,9 @@ async function updateAttendancePlan(req, res) {
 
     await upsertSubjectPlan(subject.id, { semesterTotalHours, hoursPerWeek });
     const payload = await buildPlanPayload(subject.id);
+    checkAllStudentsForSubject(subject.id).catch((err) =>
+      console.error('[alert] plan save recheck failed:', err.message),
+    );
     return res.json({ message: 'Schedule plan saved', plan: payload });
   } catch (err) {
     return planDbError(res, err, 'save');

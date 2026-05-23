@@ -220,16 +220,33 @@ async function closeSession(req, res) {
   const updated = await pool.query(
     `UPDATE attendance_sessions SET status = 'closed', closed_at = NOW()
      WHERE id = $1 AND teacher_id = $2
-     RETURNING subject_id`,
+     RETURNING id, class_id, subject_id, status`,
     [sessionId, req.user.id],
   );
-  if (req.io) {
-    req.io.to(`session:${sessionId}`).emit('session:closed', { sessionId });
-  }
-  res.json({ message: 'Session closed' });
 
-  // Fire attendance alerts after response is sent (non-blocking)
-  const subjectId = updated.rows[0]?.subject_id;
+  if (!updated.rows.length) {
+    return res.status(404).json({ error: 'Session not found or already closed' });
+  }
+
+  const row = updated.rows[0];
+  const closedPayload = {
+    id: row.id,
+    sessionId: row.id,
+    classId: row.class_id,
+    class_id: row.class_id,
+    subjectId: row.subject_id,
+    subject_id: row.subject_id,
+    status: 'closed',
+  };
+
+  if (req.io) {
+    req.io.to(`session:${sessionId}`).emit('session:closed', closedPayload);
+    req.io.to(`class:${row.class_id}`).emit('session:closed', closedPayload);
+  }
+
+  res.json({ message: 'Session closed', ...closedPayload });
+
+  const subjectId = row.subject_id;
   if (subjectId) {
     checkAllStudentsForSubject(subjectId).catch((err) =>
       console.error('[alert] checkAllStudentsForSubject failed:', err.message),
