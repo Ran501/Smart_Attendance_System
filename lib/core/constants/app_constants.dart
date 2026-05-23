@@ -1,6 +1,7 @@
 class AppConstants {
   static const String appName = 'FacePass Bhutan';
   static const String appTagline = 'AI Smart Campus Attendance';
+  static const String brandIconAsset = 'assets/icon/icon.png';
 
   /// Server uses the same value via FACE_MATCH_THRESHOLD (cosine similarity).
   static const double faceMatchThreshold = 0.70;

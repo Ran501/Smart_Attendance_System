@@ -15,6 +15,7 @@ import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
 import '../../../../services/face_registration_service.dart';
 import '../../../../services/geo_fence_service.dart';
+import '../../../../widgets/app_brand_logo.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../widgets/enterprise_shell.dart';
 import '../../../../widgets/session_timer.dart';
@@ -556,7 +557,7 @@ class _StudentHero extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.face_retouching_natural, color: scheme.primary, size: 36),
+                    AppBrandLogo.inline(size: 44),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Text(
@@ -642,7 +643,14 @@ class _LiveSessionBanner extends StatelessWidget {
               ),
               ElevatedButton.icon(
                 onPressed: marked || !within || loading ? null : onMark,
-                icon: const Icon(Icons.face_retouching_natural),
+                icon: ClipOval(
+                  child: Image.asset(
+                    AppConstants.brandIconAsset,
+                    width: 22,
+                    height: 22,
+                    fit: BoxFit.cover,
+                  ),
+                ),
                 label: Text(marked ? 'Done' : 'Mark Attendance'),
               ).animate(onPlay: (c) => c.repeat(reverse: true)).shimmer(duration: 1800.ms, color: Colors.white.withValues(alpha: 0.22)),
             ],

@@ -58,9 +58,10 @@ flutter:
   assets:
     - assets/models/mobile_face_net.tflite
     - assets/images/
+    - assets/icon/icon.png
 
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/icon/icon.jpeg"
+  image_path: "assets/icon/icon.png"
   remove_alpha_ios: true

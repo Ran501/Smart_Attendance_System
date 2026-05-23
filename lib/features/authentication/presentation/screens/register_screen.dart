@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/providers/auth_provider.dart';
+import '../../../../widgets/app_brand_logo.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../widgets/enterprise_shell.dart';
 
@@ -116,14 +117,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   children: [
                     Row(
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: [scheme.primary, scheme.secondary]),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Icon(Icons.app_registration_rounded, color: Colors.white),
-                        ),
+                        AppBrandLogo.compact(),
                         const SizedBox(width: 14),
                         Expanded(
                           child: Column(

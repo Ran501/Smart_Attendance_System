@@ -6,6 +6,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/providers/auth_provider.dart';
 import '../../../../models/user_model.dart';
 import '../../../../services/login_preferences_service.dart';
+import '../../../../widgets/app_brand_logo.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../widgets/enterprise_shell.dart';
 
@@ -196,14 +197,7 @@ class _BrandPanel extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(colors: [scheme.primary, scheme.secondary]),
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: const Icon(Icons.face_retouching_natural, color: Colors.white, size: 30),
-              ),
+              AppBrandLogo.compact(),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
