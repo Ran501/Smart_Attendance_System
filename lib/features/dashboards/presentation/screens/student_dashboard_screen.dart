@@ -284,14 +284,9 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     return statModules;
   }
 
-  double _contentTopInset(BuildContext context) {
-    return MediaQuery.paddingOf(context).top + kToolbarHeight + 8;
-  }
-
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authStateProvider).valueOrNull;
-    final textScaler = MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.12);
     return EnterpriseScaffold(
       appBar: AppBar(
         title: const Text(AppConstants.appName),
@@ -321,12 +316,12 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
         icon: const Icon(Icons.add),
         label: const Text('Join Module'),
       ),
-      body: MediaQuery(
-        data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+      body: enterpriseMetricsScope(
+        context,
         child: RefreshIndicator(
         onRefresh: _refreshDashboard,
         child: ListView(
-          padding: EdgeInsets.fromLTRB(16, _contentTopInset(context), 16, 110),
+          padding: EdgeInsets.fromLTRB(16, enterpriseContentTopInset(context), 16, 110),
           children: [
             _StudentHero(
               name: user?.fullName ?? 'Student',
@@ -431,9 +426,7 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
             const SizedBox(height: 24),
             const SectionTitle(title: 'Quick Actions'),
             const SizedBox(height: 14),
-            ResponsiveGrid(
-              crossAxisCount: 2,
-              mainAxisExtent: 108,
+            MetricsQuadGrid(
               children: [
                 MetricTile(label: 'Present', value: '${_stats?['present'] ?? 0}', icon: Icons.check_circle_outline, color: const Color(0xFF10B981)),
                 MetricTile(label: 'Absent/Rejected', value: '${_stats?['absent'] ?? _stats?['rejected'] ?? 0}', icon: Icons.cancel_outlined, color: const Color(0xFFEF4444)),

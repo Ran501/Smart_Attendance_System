@@ -277,10 +277,12 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
           IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
         ],
       ),
-      body: RefreshIndicator(
+      body: enterpriseMetricsScope(
+        context,
+        child: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 94, 16, 36),
+          padding: EdgeInsets.fromLTRB(16, enterpriseContentTopInset(context), 16, 36),
           children: [
             GlassCard(
               padding: const EdgeInsets.all(20),
@@ -325,13 +327,13 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
               ),
             ),
             const SizedBox(height: 18),
-            ResponsiveGrid(
-              minItemWidth: 145,
-              childAspectRatio: 1.0,
+            const SectionTitle(title: 'Quick Actions'),
+            const SizedBox(height: 12),
+            MetricsQuadGrid(
               children: [
                 MetricTile(label: 'Present', value: '$_presentCount', icon: Icons.check_circle_outline, color: const Color(0xFF10B981)),
-                MetricTile(label: 'Absent', value: '$_absentCount', icon: Icons.cancel_outlined, color: const Color(0xFFEF4444)),
-                MetricTile(label: 'Medical', value: '$_medicalCount', icon: Icons.medical_services_outlined, color: const Color(0xFF2563EB)),
+                MetricTile(label: 'Absent/Rejected', value: '$_absentCount', icon: Icons.cancel_outlined, color: const Color(0xFFEF4444)),
+                MetricTile(label: 'Medical Leave', value: '$_medicalCount', icon: Icons.medical_services_outlined, color: const Color(0xFF3B82F6)),
                 MetricTile(label: 'Official', value: '$_officialCount', icon: Icons.verified_outlined, color: const Color(0xFF8B5CF6)),
               ],
             ),
@@ -413,6 +415,7 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
                     ),
                   )),
           ],
+        ),
         ),
       ),
     );

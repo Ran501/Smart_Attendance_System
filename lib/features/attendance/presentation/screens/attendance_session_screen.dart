@@ -340,13 +340,15 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
+      body: enterpriseMetricsScope(
+        context,
+        child: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 94, 16, 32),
+          padding: EdgeInsets.fromLTRB(16, enterpriseContentTopInset(context), 16, 32),
           children: [
             GlassCard(
-              padding: const EdgeInsets.all(22),
+              padding: const EdgeInsets.all(20),
               color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -358,26 +360,26 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
                       SessionTimer(endsAt: _endsAt(), onExpired: _load),
                     ],
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
                   Text(subject.toString(), style: Theme.of(context).textTheme.headlineMedium),
                   const SizedBox(height: 4),
                   Text('$className • Session ID: ${widget.sessionId}', style: Theme.of(context).textTheme.bodySmall),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   StatusPill(label: 'Counts as ${_sessionUnits()} session${_sessionUnits() == 1 ? '' : 's'}', icon: Icons.calculate_outlined, color: const Color(0xFF8B5CF6)),
-                  const SizedBox(height: 18),
-                  ResponsiveGrid(
-                    minItemWidth: 145,
-                    childAspectRatio: 1.0,
-                    children: [
-                      MetricTile(label: 'Present', value: '$_presentCount', icon: Icons.check_circle_outline, color: const Color(0xFF10B981)),
-                      MetricTile(label: 'Absent', value: '$_absentCount', icon: Icons.cancel_outlined, color: const Color(0xFFEF4444)),
-                      MetricTile(label: 'Medical', value: '$_medicalCount', icon: Icons.medical_services_outlined, color: const Color(0xFF2563EB)),
-                      MetricTile(label: 'Official', value: '$_officialCount', icon: Icons.verified_outlined, color: const Color(0xFF8B5CF6)),
-                    ],
-                  ),
                 ],
               ),
             ).animate().fadeIn(duration: 450.ms).slideY(begin: 0.04),
+            const SizedBox(height: 18),
+            const SectionTitle(title: 'Session Overview'),
+            const SizedBox(height: 12),
+            MetricsQuadGrid(
+              children: [
+                MetricTile(label: 'Present', value: '$_presentCount', icon: Icons.check_circle_outline, color: const Color(0xFF10B981)),
+                MetricTile(label: 'Absent', value: '$_absentCount', icon: Icons.cancel_outlined, color: const Color(0xFFEF4444)),
+                MetricTile(label: 'Medical', value: '$_medicalCount', icon: Icons.medical_services_outlined, color: const Color(0xFF3B82F6)),
+                MetricTile(label: 'Official', value: '$_officialCount', icon: Icons.verified_outlined, color: const Color(0xFF8B5CF6)),
+              ],
+            ),
             const SizedBox(height: 18),
             GlassCard(
               padding: const EdgeInsets.all(18),
@@ -468,6 +470,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
               ),
             ],
           ],
+        ),
         ),
       ),
     );

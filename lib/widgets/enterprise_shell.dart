@@ -217,6 +217,20 @@ class StatusPill extends StatelessWidget {
   }
 }
 
+/// Top inset for scroll content under [EnterpriseScaffold]'s transparent app bar.
+double enterpriseContentTopInset(BuildContext context) {
+  return MediaQuery.paddingOf(context).top + kToolbarHeight + 8;
+}
+
+/// Limits accessibility text scale so metric grids stay consistent across phones.
+Widget enterpriseMetricsScope(BuildContext context, {required Widget child}) {
+  final textScaler = MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.12);
+  return MediaQuery(
+    data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+    child: child,
+  );
+}
+
 class MetricTile extends StatelessWidget {
   final String label;
   final String value;
@@ -229,28 +243,102 @@ class MetricTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final c = color ?? scheme.primary;
-    return GlassCard(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(16)),
-            child: Icon(icon, color: c, size: 22),
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final h = constraints.maxHeight.isFinite ? constraints.maxHeight : 120.0;
+        final w = constraints.maxWidth.isFinite ? constraints.maxWidth : 160.0;
+        final compact = h < 118;
+        final pad = compact ? 8.0 : 10.0;
+        final iconBox = compact ? 32.0 : 36.0;
+        final iconSize = compact ? 17.0 : 19.0;
+        final valueStyle = Theme.of(context).textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w900,
+              height: 1.0,
+              fontSize: compact ? 22 : 26,
+            );
+        final labelStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+              height: 1.1,
+              fontSize: compact ? 11 : 12,
+            );
+
+        return GlassCard(
+          padding: EdgeInsets.all(pad),
+          radius: 22,
+          child: SizedBox(
+            width: w,
+            height: h,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: iconBox,
+                  height: iconBox,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: c.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(compact ? 12 : 14),
+                  ),
+                  child: Icon(icon, color: c, size: iconSize),
+                ),
+                const Spacer(),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(value, style: valueStyle, maxLines: 1),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: labelStyle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
-          const Spacer(),
-          Text(
-            value,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900, height: 1.05),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+        );
+      },
+    );
+  }
+}
+
+/// Present / absent / medical / official (or similar) in a fixed 2×2 grid.
+/// Tile height scales with width and text scale so content never overflows.
+class MetricsQuadGrid extends StatelessWidget {
+  final List<Widget> children;
+  final double gap;
+  final double minTileHeight;
+  final double maxTileHeight;
+
+  const MetricsQuadGrid({
+    super.key,
+    required this.children,
+    this.gap = 14,
+    this.minTileHeight = 112,
+    this.maxTileHeight = 148,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxWidth = constraints.maxWidth;
+        final cellWidth = (maxWidth - gap) / 2;
+        final textScale = MediaQuery.textScalerOf(context).scale(1.0).clamp(1.0, 1.12);
+        final tileHeight = (cellWidth * 0.92 * textScale + 12).clamp(minTileHeight, maxTileHeight);
+        return GridView(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            mainAxisSpacing: gap,
+            crossAxisSpacing: gap,
+            mainAxisExtent: tileHeight,
           ),
-          const SizedBox(height: 3),
-          Text(label, style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
-        ],
-      ),
+          children: children,
+        );
+      },
     );
   }
 }

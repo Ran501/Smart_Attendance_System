@@ -87,13 +87,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                     ],
                   ),
                   const SizedBox(height: 18),
-                  ResponsiveGrid(
-                    minItemWidth: 150,
-                    childAspectRatio: 1.45,
+                  MetricsQuadGrid(
                     children: [
                       MetricTile(label: 'Sessions', value: '${_data.length}', icon: Icons.event_available_outlined, color: const Color(0xFF1E4ED8)),
                       MetricTile(label: 'Present', value: '$totalPresent', icon: Icons.check_circle_outline, color: const Color(0xFF10B981)),
                       MetricTile(label: 'Rejected', value: '$totalRejected', icon: Icons.gpp_bad_outlined, color: const Color(0xFFEF4444)),
+                      MetricTile(label: 'Total', value: '${_data.length}', icon: Icons.list_alt_outlined),
                     ],
                   ),
                 ],
