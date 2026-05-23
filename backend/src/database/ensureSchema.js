@@ -78,8 +78,13 @@ async function ensureRuntimeSchema() {
     `CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC);`,
   ];
 
-  for (const sql of statements) {
-    await pool.query(sql);
+  const client = await pool.connect();
+  try {
+    for (const sql of statements) {
+      await client.query(sql);
+    }
+  } finally {
+    client.release();
   }
 }
 

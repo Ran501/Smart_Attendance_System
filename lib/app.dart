@@ -75,8 +75,7 @@ class _SmartAttendanceAppState extends ConsumerState<SmartAttendanceApp> {
     ref.listen(authStateProvider, (previous, next) {
       next.whenData((user) async {
         if (user != null) {
-          await NotificationService.instance.syncTokenWithBackend();
-          await unreadCountNotifier.refresh();
+          await NotificationService.instance.afterAuthReady(soundForUnread: true);
         }
       });
     });

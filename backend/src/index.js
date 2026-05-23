@@ -7,6 +7,7 @@ const { Server } = require('socket.io');
 const config = require('./config');
 const routes = require('./routes');
 const { ensureRuntimeSchema } = require('./database/ensureSchema');
+const { logPushStatusOnStartup } = require('./services/notificationService');
 
 const app = express();
 const server = http.createServer(app);
@@ -61,6 +62,7 @@ io.on('connection', (socket) => {
 
 async function start() {
   await ensureRuntimeSchema();
+  logPushStatusOnStartup();
   server.listen(config.port, () => {
     console.log(`Smart Attendance API running on port ${config.port}`);
   });

@@ -80,7 +80,7 @@ function buildFcmMessage({ token, type, title, body, data }) {
     android: {
       priority: 'high',
       notification: {
-        channelId: 'attendance_alerts',
+        channelId: 'attendance_alerts_v2',
         sound: 'default',
         defaultSound: true,
         defaultVibrateTimings: true,
@@ -194,4 +194,24 @@ async function notifyClassSessionStarted(classId, session) {
   );
 }
 
-module.exports = { sendToUser, saveNotification, notifyClassSessionStarted };
+function logPushStatusOnStartup() {
+  const serviceAccount = loadServiceAccount();
+  if (!serviceAccount) {
+    console.warn(
+      '[FCM] OFF — add FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON to backend/.env',
+    );
+    console.warn('[FCM] Without this, notifications stay in-app (bell) only; no phone tray push.');
+    return;
+  }
+  const fcm = getMessaging();
+  if (fcm) {
+    console.log('[FCM] ON — phone push notifications enabled (tray + sound when app is closed)');
+  }
+}
+
+module.exports = {
+  sendToUser,
+  saveNotification,
+  notifyClassSessionStarted,
+  logPushStatusOnStartup,
+};

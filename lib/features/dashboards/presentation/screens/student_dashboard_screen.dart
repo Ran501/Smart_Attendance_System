@@ -32,7 +32,6 @@ class StudentDashboardScreen extends ConsumerStatefulWidget {
 class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen> {
   Map<String, dynamic>? _stats;
   bool _faceRegistered = false;
-  List<Map<String, dynamic>> _activeSessions = [];
   List<Map<String, dynamic>> _joinedModules = [];
   List<String> _enrolledClassIds = [];
   bool _loadingSessions = false;
@@ -67,17 +66,7 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
 
   void _onProximityUpdate(Map<String, BleSessionProximity> states) {
     if (!mounted) return;
-    setState(() {
-      _proximity = states;
-      _activeSessions = _sessionsInBluetoothRange();
-    });
-  }
-
-  List<Map<String, dynamic>> _sessionsInBluetoothRange() {
-    return _apiSessions.where((s) {
-      final id = (s['id'] ?? s['session_id'] ?? '').toString();
-      return _proximity[id]?.visibleOnDashboard == true;
-    }).toList();
+    setState(() => _proximity = states);
   }
 
   BleSessionProximity? _proximityFor(Map<String, dynamic> session) {
@@ -167,7 +156,6 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
         setState(() {
           _apiSessionCount = all.length;
           _apiSessions = all;
-          _activeSessions = _sessionsInBluetoothRange();
           _enrolledClassIds = result.enrolledClassIds;
           _loadingSessions = false;
         });
@@ -175,7 +163,10 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
       }
     } on DioException catch (e) {
       if (mounted) {
-        setState(() => _activeSessions = []);
+        setState(() {
+          _apiSessions = [];
+          _apiSessionCount = 0;
+        });
         final msg = ApiClient.messageFromDio(e);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -191,7 +182,10 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _activeSessions = []);
+        setState(() {
+          _apiSessions = [];
+          _apiSessionCount = 0;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Could not load sessions: $e'),
@@ -385,8 +379,13 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
               },
             ).animate().fadeIn(duration: 450.ms).slideY(begin: 0.04),
             const SizedBox(height: 18),
-            if (_activeSessions.isNotEmpty)
-              ..._activeSessions.map((session) => Padding(
+            if (_apiSessions.isNotEmpty) ...[
+              SectionTitle(
+                title: _apiSessions.length == 1 ? 'Live Session' : 'Live Sessions (${_apiSessions.length})',
+                subtitle: 'Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m of your teacher to mark each session.',
+              ),
+              const SizedBox(height: 12),
+              ..._apiSessions.map((session) => Padding(
                     padding: const EdgeInsets.only(bottom: 14),
                     child: _LiveSessionBanner(
                       session: session,
@@ -395,36 +394,8 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
                       onMark: () => _markAttendance(session),
                     ),
                   )),
-            if (_apiSessionCount > 0 && _activeSessions.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 14),
-                child: GlassCard(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.bluetooth_searching, color: Color(0xFF3B82F6)),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          _loadingSessions
-                              ? 'Scanning for teacher Bluetooth (within ${AppConstants.bleMaxDistanceMeters.toInt()} m)...'
-                              : _proximity.values.any((p) => p.band == BleProximityBand.weak)
-                                  ? 'You are almost in range. Move a little closer (within ${AppConstants.bleMaxDistanceMeters.toInt()} m of your teacher).'
-                                  : 'You are outside range. A session is live — move closer to your teacher (within ${AppConstants.bleMaxDistanceMeters.toInt()} m) with Bluetooth on to mark attendance.',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ),
-                      if (_loadingSessions)
-                        const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            if (_activeSessions.isEmpty && _apiSessionCount == 0)
+            ],
+            if (_apiSessions.isEmpty && _apiSessionCount == 0)
               GlassCard(
                 padding: const EdgeInsets.all(16),
                 child: Row(
@@ -743,9 +714,11 @@ class _LiveSessionBanner extends StatelessWidget {
     final marked = session['already_marked'] == true;
     final subject = (session['subject_name'] ?? session['subjectName'] ?? 'Active Class').toString();
     final teacher = (session['teacher_name'] ?? session['teacherName'] ?? session['teacher'] ?? 'Teacher').toString();
-    final ready = proximity?.canMarkAttendance ?? false;
-    final proximityLabel = proximity?.bandLabel ??
-        'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m';
+    final ready = proximity?.readyToMark ?? false;
+    final outOfRange = proximity == null || proximity!.band == BleProximityBand.outOfRange;
+    final proximityLabel = loading && proximity == null
+        ? 'Scanning Bluetooth...'
+        : proximity?.bandLabel ?? 'Out of range — move closer';
     final distText = proximity?.estimatedMeters != null
         ? ' · ≈${proximity!.estimatedMeters!.toStringAsFixed(0)} m'
         : '';
@@ -785,15 +758,19 @@ class _LiveSessionBanner extends StatelessWidget {
                     ? Icons.check_circle
                     : ready
                         ? Icons.bluetooth_connected
-                        : Icons.bluetooth_searching,
+                        : outOfRange
+                            ? Icons.bluetooth_disabled
+                            : Icons.bluetooth_searching,
                 color: marked
                     ? const Color(0xFF10B981)
                     : ready
                         ? const Color(0xFF10B981)
-                        : const Color(0xFF3B82F6),
+                        : outOfRange
+                            ? const Color(0xFFEF4444)
+                            : const Color(0xFF3B82F6),
               ),
               ElevatedButton.icon(
-                onPressed: marked || loading || !ready ? null : onMark,
+                onPressed: marked || !ready ? null : onMark,
                 icon: ClipOval(
                   child: Image.asset(
                     AppConstants.brandIconAsset,

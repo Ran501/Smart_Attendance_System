@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +9,7 @@ import '../../../../core/providers/auth_provider.dart';
 import '../../../../models/attendance_session_model.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
+import '../../../../services/realtime_socket.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../widgets/enterprise_shell.dart';
 
@@ -23,11 +26,57 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
   bool _loading = false;
   String? _modulesError;
   String? _sessionsError;
+  final _realtime = RealtimeAttendanceSocket();
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted && !_loading) _loadQuiet();
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _realtime.disconnect();
+    super.dispose();
+  }
+
+  String _classIdFromModule(Map<String, dynamic> module) {
+    return (module['class_id'] ??
+            module['classId'] ??
+            module['class'] ??
+            '')
+        .toString();
+  }
+
+  void _connectRealtime() {
+    final classIds = _modules.map(_classIdFromModule).where((id) => id.isNotEmpty).toSet();
+    _realtime.connect(
+      classIds: classIds,
+      onDataChanged: () {
+        if (mounted) _loadQuiet();
+      },
+    );
+  }
+
+  /// Refresh without full-screen loading spinner (socket / poll).
+  Future<void> _loadQuiet() async {
+    try {
+      final modules = await CatalogService().getTeacherModules();
+      final sessions = await AttendanceService().getActiveSessions();
+      if (!mounted) return;
+      setState(() {
+        _modules = modules;
+        _activeSessions = sessions;
+        _modulesError = null;
+        _sessionsError = null;
+      });
+      _connectRealtime();
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -72,6 +121,7 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
           SnackBar(content: Text('Modules loaded, but active sessions failed: $sessionsError'), backgroundColor: Colors.orange),
         );
       }
+      _connectRealtime();
     }
   }
 

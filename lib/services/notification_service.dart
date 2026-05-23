@@ -14,8 +14,10 @@ class NotificationService {
   final _fcm = FirebaseMessaging.instance;
   final _localNotifications = FlutterLocalNotificationsPlugin();
 
-  static const _channelId = 'attendance_alerts';
+  /// v2 channel — Android channels cannot change sound after creation; use a new id.
+  static const _channelId = 'attendance_alerts_v2';
   static const _channelName = 'Attendance Alerts';
+  static const _legacyChannelId = 'attendance_alerts';
 
   bool _initialized = false;
 
@@ -27,11 +29,9 @@ class NotificationService {
     await _configureFcm();
 
     _initialized = true;
-    await syncTokenWithBackend();
     _fcm.onTokenRefresh.listen(_sendTokenToBackend);
   }
 
-  /// Background FCM isolate — channel + plugin must be set up here too.
   Future<void> ensureReadyForBackground() async {
     if (_initialized) return;
     await _ensureNotificationChannels();
@@ -39,13 +39,47 @@ class NotificationService {
     _initialized = true;
   }
 
+  /// After login / restore session: register FCM token and alert unread with sound.
+  Future<void> afterAuthReady({bool soundForUnread = true}) async {
+    await syncTokenWithBackend();
+    await unreadCountNotifier.refresh();
+    if (soundForUnread && unreadCountNotifier.value > 0) {
+      await alertLatestUnreadWithSound();
+    }
+  }
+
+  /// Shows the newest unread notification in the phone tray with sound (e.g. on login).
+  Future<void> alertLatestUnreadWithSound() async {
+    try {
+      final items = await fetchNotifications();
+      final unread = items.where((n) => n['is_read'] != true).toList();
+      if (unread.isEmpty) return;
+
+      final latest = unread.first;
+      final title = (latest['title'] as String?)?.trim();
+      final body = (latest['body'] as String?)?.trim();
+      if (title == null || title.isEmpty || body == null || body.isEmpty) return;
+
+      await _showTrayNotification(
+        id: 'unread_${latest['id'] ?? DateTime.now().millisecondsSinceEpoch}'.hashCode,
+        title: title,
+        body: body,
+      );
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Notify] alertLatestUnread: $e');
+    }
+  }
+
   Future<void> _requestPermissions() async {
     await _fcm.requestPermission(alert: true, badge: true, sound: true);
 
     if (Platform.isAndroid) {
-      final status = await Permission.notification.status;
+      var status = await Permission.notification.status;
       if (!status.isGranted) {
-        await Permission.notification.request();
+        status = await Permission.notification.request();
+      }
+      if (kDebugMode && !status.isGranted) {
+        debugPrint('[Notify] Android notification permission denied');
       }
     }
 
@@ -61,19 +95,23 @@ class NotificationService {
   Future<void> _ensureNotificationChannels() async {
     if (!Platform.isAndroid) return;
 
+    final androidPlugin = _localNotifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+
+    await androidPlugin?.deleteNotificationChannel(_legacyChannelId);
+
     const channel = AndroidNotificationChannel(
       _channelId,
       _channelName,
-      description: 'Live sessions and attendance alerts',
+      description: 'Live sessions and attendance alerts with sound',
       importance: Importance.max,
       playSound: true,
       enableVibration: true,
       showBadge: true,
+      audioAttributesUsage: AudioAttributesUsage.notification,
     );
 
-    await _localNotifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
+    await androidPlugin?.createNotificationChannel(channel);
   }
 
   Future<void> _initLocalPlugin() async {
@@ -94,20 +132,31 @@ class NotificationService {
       await unreadCountNotifier.refresh();
     });
 
-    FirebaseMessaging.onMessageOpenedApp.listen((_) => unreadCountNotifier.refresh());
+    FirebaseMessaging.onMessageOpenedApp.listen((_) {
+      unreadCountNotifier.refresh();
+      alertLatestUnreadWithSound();
+    });
+
+    final initial = await _fcm.getInitialMessage();
+    if (initial != null) {
+      await unreadCountNotifier.refresh();
+    }
   }
 
   NotificationDetails _notificationDetails() {
     const android = AndroidNotificationDetails(
       _channelId,
       _channelName,
-      channelDescription: 'Live sessions and attendance alerts',
+      channelDescription: 'Live sessions and attendance alerts with sound',
       importance: Importance.max,
       priority: Priority.high,
       playSound: true,
       enableVibration: true,
       icon: '@mipmap/ic_launcher',
       ticker: 'FacePass Bhutan',
+      category: AndroidNotificationCategory.message,
+      audioAttributesUsage: AudioAttributesUsage.notification,
+      visibility: NotificationVisibility.public,
     );
 
     const ios = DarwinNotificationDetails(
@@ -115,6 +164,7 @@ class NotificationService {
       presentBadge: true,
       presentSound: true,
       sound: 'default',
+      interruptionLevel: InterruptionLevel.timeSensitive,
     );
 
     return const NotificationDetails(android: android, iOS: ios);
@@ -137,7 +187,6 @@ class NotificationService {
     );
   }
 
-  /// Tray + sound when a live session starts (socket while app open, or manual).
   Future<void> showSessionStartedAlert({
     required String title,
     required String body,
@@ -157,7 +206,7 @@ class NotificationService {
     final className = payload['className'] ?? payload['class_name'] ?? '';
     final range = payload['ble_max_distance_meters'] ?? payload['bleMaxDistanceMeters'] ?? 20;
 
-    final title = 'Live attendance session';
+    const title = 'Live attendance session';
     final body = className.toString().isNotEmpty
         ? '$subject ($className) is live. Mark attendance within $range m.'
         : '$subject is live. Mark attendance within $range m.';
@@ -193,22 +242,19 @@ class NotificationService {
       if (token != null) {
         await _sendTokenToBackend(token);
       } else if (kDebugMode) {
-        debugPrint('[FCM] getToken() returned null — check google-services.json');
+        debugPrint('[FCM] getToken() null — add google-services.json and rebuild');
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[FCM] syncTokenWithBackend: $e');
+      if (kDebugMode) debugPrint('[FCM] syncToken: $e');
     }
   }
 
   Future<void> _sendTokenToBackend(String token) async {
     try {
       final hasAuth = await ApiClient.instance.getToken();
-      if (hasAuth == null) {
-        if (kDebugMode) debugPrint('[FCM] Skip token upload — not logged in');
-        return;
-      }
+      if (hasAuth == null) return;
       await ApiClient.instance.dio.post('/device/token', data: {'token': token});
-      if (kDebugMode) debugPrint('[FCM] Device token registered with backend');
+      if (kDebugMode) debugPrint('[FCM] Device token saved on server');
     } catch (e) {
       if (kDebugMode) debugPrint('[FCM] Token upload failed: $e');
     }

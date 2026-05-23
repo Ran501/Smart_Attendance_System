@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../services/api_client.dart';
+import '../../../../services/realtime_socket.dart';
 import '../../../../widgets/enterprise_shell.dart';
 
 class AnalyticsScreen extends StatefulWidget {
@@ -14,11 +17,34 @@ class AnalyticsScreen extends StatefulWidget {
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
   List<Map<String, dynamic>> _data = [];
   bool _loading = false;
+  final _realtime = RealtimeAttendanceSocket();
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted && !_loading) _loadQuiet();
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _realtime.disconnect();
+    super.dispose();
+  }
+
+  Future<void> _loadQuiet() async {
+    try {
+      final res = await ApiClient.instance.dio.get('/analytics/teacher');
+      if (!mounted) return;
+      setState(() {
+        _data = (res.data as List).map((e) => (e as Map).cast<String, dynamic>()).toList();
+      });
+      _connectRealtime();
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -29,6 +55,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         setState(() {
           _data = (res.data as List).map((e) => (e as Map).cast<String, dynamic>()).toList();
         });
+        _connectRealtime();
       }
     } catch (e) {
       if (mounted) {
@@ -37,6 +64,19 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _connectRealtime() {
+    final classIds = _data
+        .map((s) => (s['class_id'] ?? s['classId'] ?? '').toString())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    _realtime.connect(
+      classIds: classIds,
+      onDataChanged: () {
+        if (mounted && !_loading) _loadQuiet();
+      },
+    );
   }
 
   int _sum(String key) => _data.fold<int>(0, (sum, s) => sum + ((s[key] as num?)?.toInt() ?? 0));

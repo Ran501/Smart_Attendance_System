@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
@@ -8,6 +10,7 @@ import 'package:printing/printing.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
+import '../../../../services/realtime_socket.dart';
 import '../../../../services/teacher_ble_beacon_service.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../services/notification_service.dart';
@@ -36,12 +39,40 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
   int _sessionUnits = 1;
   bool _loading = false;
   bool _starting = false;
+  final _realtime = RealtimeAttendanceSocket();
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
     unreadCountNotifier.refresh();
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted && !_loading && !_starting) _loadQuiet();
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _realtime.disconnect();
+    super.dispose();
+  }
+
+  void _connectRealtime() {
+    _realtime.connect(
+      classIds: [_classId],
+      onDataChanged: () {
+        if (mounted) _loadQuiet();
+      },
+    );
+  }
+
+  Future<void> _loadQuiet() async {
+    try {
+      final sessions = await _attendanceService.getModuleSessions(moduleId: _moduleId);
+      if (mounted) setState(() => _sessions = sessions);
+    } catch (_) {}
   }
 
   String get _moduleId {
@@ -104,6 +135,7 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
           SnackBar(content: Text('Could not load sessions: $sessionError'), backgroundColor: Colors.red),
         );
       }
+      _connectRealtime();
     }
   }
 
