@@ -1,11 +1,12 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../../../../core/config/api_config.dart';
 import '../../../../core/constants/app_constants.dart';
+import '../../../../services/api_client.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/bluetooth_validation_service.dart';
 import '../../../../services/geo_fence_service.dart';
@@ -111,8 +112,14 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
         }
       } catch (e) {
         if (mounted) {
+          final msg = e is DioException
+              ? ApiClient.messageFromDio(e)
+              : e.toString().replaceFirst('Exception: ', '');
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not load session attendance: $e'), backgroundColor: Colors.red),
+            SnackBar(
+              content: Text('Could not load session attendance: $msg'),
+              backgroundColor: Colors.red,
+            ),
           );
         }
       }
@@ -145,20 +152,56 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   Future<void> _export(String type) async {
     final report = ReportService();
     final records = _attendance;
-    File? file;
-    switch (type) {
-      case 'pdf':
-        file = await report.exportPdf(sessionId: widget.sessionId, session: _session ?? {'class_id': widget.sessionId}, records: records);
-        break;
-      case 'csv':
-        file = await report.exportCsv(sessionId: widget.sessionId, records: records);
-        break;
-      case 'excel':
-        file = await report.exportExcel(sessionId: widget.sessionId, records: records);
-        break;
-    }
-    if (mounted && file != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Exported to ${file.path}')));
+    try {
+      ReportExportResult result;
+      switch (type) {
+        case 'pdf':
+          result = await report.exportPdf(
+            sessionId: widget.sessionId,
+            session: _session ?? {'class_id': widget.sessionId},
+            records: records,
+          );
+          break;
+        case 'csv':
+          result = await report.exportCsv(
+            sessionId: widget.sessionId,
+            records: records,
+          );
+          break;
+        case 'excel':
+          result = await report.exportExcel(
+            sessionId: widget.sessionId,
+            records: records,
+          );
+          break;
+        default:
+          return;
+      }
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Saved to ${result.displayPath}\n'
+            'Files app → Downloads → FacePass folder',
+          ),
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: 'OK',
+            onPressed: () {},
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Export failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 

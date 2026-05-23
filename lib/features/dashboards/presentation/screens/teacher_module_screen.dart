@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -22,12 +23,14 @@ class TeacherModuleScreen extends StatefulWidget {
 }
 
 class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
+  static const int _sessionsPerReportPage = 15;
+
   final _attendanceService = AttendanceService();
   final _geo = GeoFenceService();
 
   List<Map<String, dynamic>> _sessions = [];
-  List<Map<String, dynamic>> _classrooms = [];
-  String? _selectedClassroom;
+  String? _moduleClassroomId;
+  String _moduleClassroomName = '';
   int _durationMinutes = AppConstants.defaultSessionDurationMinutes;
   int _sessionUnits = 1;
   bool _gpsValidation = true;
@@ -71,8 +74,9 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
     setState(() => _loading = true);
 
     var sessions = <Map<String, dynamic>>[];
-    var classrooms = <Map<String, dynamic>>[];
     String? sessionError;
+    String? classroomId;
+    var classroomName = _className;
 
     try {
       sessions = await _attendanceService.getModuleSessions(moduleId: _moduleId);
@@ -81,18 +85,19 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
     }
 
     try {
-      classrooms = await CatalogService().getClassrooms(classId: _classId);
-    } catch (_) {
-      classrooms = <Map<String, dynamic>>[];
-    }
+      final classrooms = await CatalogService().getClassrooms(classId: _classId);
+      if (classrooms.isNotEmpty) {
+        final room = classrooms.first;
+        classroomId = (room['id'] ?? room['classroom_id'] ?? room['classroomId'])?.toString();
+        classroomName = (room['name'] ?? room['room_name'] ?? room['classroomName'] ?? _className).toString();
+      }
+    } catch (_) {}
 
     if (mounted) {
       setState(() {
         _sessions = sessions;
-        _classrooms = classrooms;
-        if (_selectedClassroom == null && _classrooms.isNotEmpty) {
-          _selectedClassroom = (_classrooms.first['id'] ?? _classrooms.first['classroom_id'] ?? _classrooms.first['classroomId'])?.toString();
-        }
+        _moduleClassroomId = classroomId;
+        _moduleClassroomName = classroomName;
         _loading = false;
       });
       if (sessionError != null) {
@@ -104,8 +109,10 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
   }
 
   Future<void> _startSession() async {
-    if (_selectedClassroom == null || _selectedClassroom!.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select a classroom first')));
+    if (_moduleClassroomId == null || _moduleClassroomId!.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No classroom linked to this module yet')),
+      );
       return;
     }
     setState(() => _starting = true);
@@ -121,7 +128,7 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
       final session = await _attendanceService.createSession(
         classId: _classId,
         subjectId: _moduleId,
-        classroomId: _selectedClassroom!,
+        classroomId: _moduleClassroomId!,
         latitude: position.latitude,
         longitude: position.longitude,
         accuracy: position.accuracy,
@@ -193,35 +200,105 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
     return (m['student_id'] ?? m['studentId'] ?? m['student_code'] ?? m['studentCode'] ?? m['user_id'] ?? m['userId'] ?? m['cid'] ?? _studentName(m)).toString();
   }
 
-  Future<List<_StudentSummary>> _buildStudentSummaries() async {
-    final summary = <String, _StudentSummary>{};
-    for (final session in _sessions) {
+  DateTime _sessionStartedAt(Map<String, dynamic> session) {
+    final raw = session['started_at'] ?? session['startedAt'] ?? session['created_at'] ?? session['createdAt'];
+    return DateTime.tryParse(raw?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  String _sessionHeaderLabel(Map<String, dynamic> session) {
+    final dt = _sessionStartedAt(session);
+    final date = DateFormat('dd/MM/yyyy').format(dt);
+    final time = DateFormat('hh:mm a').format(dt);
+    final hours = _unitsOf(session);
+    return '$date\n$time\n${hours}h';
+  }
+
+  List<List<_SessionColumn>> _sessionPages(List<_SessionColumn> sessions) {
+    if (sessions.isEmpty) return [[]];
+    final pages = <List<_SessionColumn>>[];
+    for (var i = 0; i < sessions.length; i += _sessionsPerReportPage) {
+      final end = (i + _sessionsPerReportPage > sessions.length)
+          ? sessions.length
+          : i + _sessionsPerReportPage;
+      pages.add(sessions.sublist(i, end));
+    }
+    return pages;
+  }
+
+  Widget _statusMark(String status) {
+    switch (status) {
+      case 'PRESENT':
+      case 'LATE':
+        return const Text('P', style: TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.w900, fontSize: 16));
+      case 'MEDICAL_LEAVE':
+        return const Text('ML', style: TextStyle(color: Color(0xFFF97316), fontWeight: FontWeight.w800));
+      case 'OFFICIAL_LEAVE':
+        return const Text('OL', style: TextStyle(color: Color(0xFFF97316), fontWeight: FontWeight.w800));
+      default:
+        return const Text('A', style: TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.w900));
+    }
+  }
+
+  pw.Widget _pdfStatusMark(String status) {
+    switch (status) {
+      case 'PRESENT':
+      case 'LATE':
+        return pw.Text('P', style: pw.TextStyle(color: PdfColors.green, fontWeight: pw.FontWeight.bold, fontSize: 10));
+      case 'MEDICAL_LEAVE':
+        return pw.Text('ML', style: pw.TextStyle(color: PdfColors.orange, fontWeight: pw.FontWeight.bold, fontSize: 9));
+      case 'OFFICIAL_LEAVE':
+        return pw.Text('OL', style: pw.TextStyle(color: PdfColors.orange, fontWeight: pw.FontWeight.bold, fontSize: 9));
+      default:
+        return pw.Text('A', style: pw.TextStyle(color: PdfColors.red, fontWeight: pw.FontWeight.bold, fontSize: 10));
+    }
+  }
+
+  Future<_ModuleReport> _buildModuleReport() async {
+    final sortedSessions = List<Map<String, dynamic>>.from(_sessions)
+      ..sort((a, b) => _sessionStartedAt(a).compareTo(_sessionStartedAt(b)));
+
+    final sessionColumns = sortedSessions
+        .map(
+          (s) => _SessionColumn(
+            id: _sessionId(s),
+            header: _sessionHeaderLabel(s),
+            units: _unitsOf(s),
+          ),
+        )
+        .where((s) => s.id.isNotEmpty)
+        .toList();
+
+    final students = <String, _StudentReportRow>{};
+
+    for (final session in sortedSessions) {
       final sessionId = _sessionId(session);
       if (sessionId.isEmpty) continue;
       final units = _unitsOf(session);
       final records = await _attendanceService.getSessionRoster(sessionId);
       for (final record in records) {
         final studentId = _studentId(record);
-        final student = summary.putIfAbsent(studentId, () => _StudentSummary(id: studentId, name: _studentName(record)));
-        student.totalUnits += units;
-        switch (_statusOf(record)) {
-          case 'PRESENT':
-            student.presentUnits += units;
-            break;
-          case 'MEDICAL_LEAVE':
-            student.medicalUnits += units;
-            break;
-          case 'OFFICIAL_LEAVE':
-            student.officialUnits += units;
-            break;
-          default:
-            student.absentUnits += units;
-        }
+        final row = students.putIfAbsent(
+          studentId,
+          () => _StudentReportRow(id: studentId, name: _studentName(record)),
+        );
+        row.applySession(sessionId, _statusOf(record), units);
       }
     }
-    final rows = summary.values.toList()
+
+  // Mark absent for students missing from a session roster.
+    for (final session in sessionColumns) {
+      for (final row in students.values) {
+        row.ensureSession(session.id, session.units);
+      }
+    }
+
+    final rows = students.values.toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    return rows;
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].slNo = i + 1;
+    }
+
+    return _ModuleReport(sessions: sessionColumns, rows: rows);
   }
 
   Future<void> _showSummarySheet() async {
@@ -231,8 +308,9 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
     }
     setState(() => _loading = true);
     try {
-      final rows = await _buildStudentSummaries();
+      final report = await _buildModuleReport();
       if (!mounted) return;
+      final sessionPages = _sessionPages(report.sessions);
       await showModalBottomSheet<void>(
         context: context,
         isScrollControlled: true,
@@ -244,71 +322,80 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
             maxChildSize: 0.95,
             builder: (_, scrollController) {
               return GlassCard(
-                radius: 30,
-                padding: const EdgeInsets.all(18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
+                    radius: 30,
+                    padding: const EdgeInsets.all(18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(child: Text('Attendance Summary', style: Theme.of(context).textTheme.headlineSmall)),
-                        IconButton(icon: const Icon(Icons.print_outlined), onPressed: () => _printSummary(rows)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        StatusPill(label: '${_sessions.length} Records', icon: Icons.event_note_outlined, color: const Color(0xFF1E4ED8)),
-                        StatusPill(label: '$_totalSessionUnits Counted Sessions', icon: Icons.calculate_outlined, color: const Color(0xFF10B981)),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Expanded(
-                      child: rows.isEmpty
-                          ? const Center(child: Text('No student records returned by backend roster endpoint.'))
-                          : SingleChildScrollView(
-                              controller: scrollController,
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: DataTable(
-                                  columns: const [
-                                    DataColumn(label: Text('Student')),
-                                    DataColumn(label: Text('ID')),
-                                    DataColumn(label: Text('Present')),
-                                    DataColumn(label: Text('Absent')),
-                                    DataColumn(label: Text('Medical')),
-                                    DataColumn(label: Text('Official')),
-                                    DataColumn(label: Text('Present %')),
-                                    DataColumn(label: Text('Absent Rule')),
-                                    DataColumn(label: Text('Leave Rule')),
-                                    DataColumn(label: Text('Status')),
-                                  ],
-                                  rows: rows.map((r) {
-                                    final color = r.isSafe ? const Color(0xFF10B981) : const Color(0xFFEF4444);
-                                    return DataRow(cells: [
-                                      DataCell(Text(r.name)),
-                                      DataCell(Text(r.id)),
-                                      DataCell(Text('${r.presentUnits}')),
-                                      DataCell(Text('${r.absentUnits}')),
-                                      DataCell(Text('${r.medicalUnits}')),
-                                      DataCell(Text('${r.officialUnits}')),
-                                      DataCell(Text('${r.presentPercentage.toStringAsFixed(1)}%')),
-                                      DataCell(Text('${r.absentRulePercentage.toStringAsFixed(1)}%')),
-                                      DataCell(Text('${r.leaveRulePercentage.toStringAsFixed(1)}%')),
-                                      DataCell(Text(r.statusLabel, style: TextStyle(color: color, fontWeight: FontWeight.w800))),
-                                    ]);
-                                  }).toList(),
+                        Row(
+                          children: [
+                            Expanded(child: Text('Attendance Summary', style: Theme.of(context).textTheme.headlineSmall)),
+                            IconButton(icon: const Icon(Icons.print_outlined), onPressed: () => _printSummary(report)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        StatusPill(
+                          label: '${report.sessions.length} Sessions • ${sessionPages.length} page(s)',
+                          icon: Icons.event_note_outlined,
+                          color: const Color(0xFF1E4ED8),
+                        ),
+                        const SizedBox(height: 14),
+                        Expanded(
+                          child: report.rows.isEmpty
+                              ? const Center(child: Text('No student records returned by backend roster endpoint.'))
+                              : PageView.builder(
+                                  itemCount: sessionPages.length,
+                                  itemBuilder: (_, pageIndex) {
+                                    final chunk = sessionPages[pageIndex];
+                                    final isLastPage = pageIndex == sessionPages.length - 1;
+                                    return SingleChildScrollView(
+                                      controller: scrollController,
+                                      child: SingleChildScrollView(
+                                        scrollDirection: Axis.horizontal,
+                                        child: DataTable(
+                                          columns: [
+                                            const DataColumn(label: Text('Sl')),
+                                            const DataColumn(label: Text('Name')),
+                                            const DataColumn(label: Text('ID')),
+                                            ...chunk.map(
+                                              (s) => DataColumn(
+                                                label: Text(s.header, textAlign: TextAlign.center),
+                                              ),
+                                            ),
+                                            if (isLastPage) ...[
+                                              const DataColumn(label: Text('Rule 1')),
+                                              const DataColumn(label: Text('Rule 2')),
+                                            ],
+                                          ],
+                                          rows: report.rows.map((r) {
+                                            return DataRow(
+                                              cells: [
+                                                DataCell(Text('${r.slNo}')),
+                                                DataCell(Text(r.name)),
+                                                DataCell(Text(r.id)),
+                                                ...chunk.map(
+                                                  (s) => DataCell(
+                                                    Center(child: _statusMark(r.statusFor(s.id))),
+                                                  ),
+                                                ),
+                                                if (isLastPage) ...[
+                                                  DataCell(Text('${r.rule1Percentage.toStringAsFixed(1)}%')),
+                                                  DataCell(Text('${r.rule2Percentage.toStringAsFixed(1)}%')),
+                                                ],
+                                              ],
+                                            );
+                                          }).toList(),
+                                        ),
+                                      ),
+                                    );
+                                  },
                                 ),
-                              ),
-                            ),
+                        ),
+                        const SizedBox(height: 12),
+                        AppButton(label: 'Print Summary Report', icon: Icons.print_outlined, onPressed: () => _printSummary(report)),
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                    AppButton(label: 'Print Summary Report', icon: Icons.print_outlined, onPressed: () => _printSummary(rows)),
-                  ],
-                ),
-              );
+                  );
             },
           );
         },
@@ -322,41 +409,110 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
     }
   }
 
-  Future<void> _printSummary(List<_StudentSummary> rows) async {
-    final pdf = pw.Document();
-    final now = DateTime.now();
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4.landscape,
-        build: (_) => [
-          pw.Text('FacePass Bhutan - Attendance Summary', style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
-          pw.SizedBox(height: 6),
-          pw.Text('Module: $_moduleName ($_moduleId)'),
-          pw.Text('Class: $_className'),
-          pw.Text('Generated: ${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}'),
-          pw.Text('Manual rule: Absent-only percentage must be at least 90%. Absent + medical + official leave percentage must keep leave-rule percentage at least 80%.'),
-          pw.SizedBox(height: 12),
-          pw.TableHelper.fromTextArray(
-            headers: ['Student', 'ID', 'Total', 'Present', 'Absent', 'Medical', 'Official', 'Present %', 'Absent Rule', 'Leave Rule', 'Status'],
-            data: rows
-                .map((r) => [
-                      r.name,
-                      r.id,
-                      '${r.totalUnits}',
-                      '${r.presentUnits}',
-                      '${r.absentUnits}',
-                      '${r.medicalUnits}',
-                      '${r.officialUnits}',
-                      '${r.presentPercentage.toStringAsFixed(1)}%',
-                      '${r.absentRulePercentage.toStringAsFixed(1)}%',
-                      '${r.leaveRulePercentage.toStringAsFixed(1)}%',
-                      r.statusLabel,
-                    ])
-                .toList(),
-          ),
+  List<pw.TableRow> _pdfTableRows(
+    _ModuleReport report,
+    List<_SessionColumn> sessionChunk, {
+    required bool includeRules,
+  }) {
+    final headerStyle = pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold);
+    final cellStyle = const pw.TextStyle(fontSize: 8);
+
+    pw.Widget cell(String text, {pw.TextStyle? style, pw.TextAlign align = pw.TextAlign.center}) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.all(3),
+        child: pw.Text(text, style: style ?? cellStyle, textAlign: align),
+      );
+    }
+
+    return [
+      pw.TableRow(
+        children: [
+          cell('Sl', style: headerStyle),
+          cell('Name', style: headerStyle, align: pw.TextAlign.left),
+          cell('ID', style: headerStyle),
+          ...sessionChunk.map((s) => cell(s.header, style: headerStyle)),
+          if (includeRules) ...[
+            cell('Rule 1', style: headerStyle),
+            cell('Rule 2', style: headerStyle),
+          ],
         ],
       ),
-    );
+      ...report.rows.map(
+        (r) => pw.TableRow(
+          children: [
+            cell('${r.slNo}'),
+            pw.Padding(
+              padding: const pw.EdgeInsets.all(3),
+              child: pw.Text(r.name, style: cellStyle),
+            ),
+            cell(r.id),
+            ...sessionChunk.map(
+              (s) => pw.Padding(
+                padding: const pw.EdgeInsets.all(3),
+                child: pw.Center(child: _pdfStatusMark(r.statusFor(s.id))),
+              ),
+            ),
+            if (includeRules) ...[
+              cell('${r.rule1Percentage.toStringAsFixed(1)}%'),
+              cell('${r.rule2Percentage.toStringAsFixed(1)}%'),
+            ],
+          ],
+        ),
+      ),
+    ];
+  }
+
+  Future<void> _printSummary(_ModuleReport report) async {
+    final pdf = pw.Document();
+    final now = DateTime.now();
+    final sessionPages = _sessionPages(report.sessions);
+    final titleStyle = pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold);
+    final metaStyle = const pw.TextStyle(fontSize: 9);
+
+    for (var pageIndex = 0; pageIndex < sessionPages.length; pageIndex++) {
+      final chunk = sessionPages[pageIndex];
+      final isLastPage = pageIndex == sessionPages.length - 1;
+      final tableRows = _pdfTableRows(report, chunk, includeRules: isLastPage);
+
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4.landscape,
+          build: (context) {
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text('FacePass Bhutan - Attendance Summary', style: titleStyle),
+                pw.SizedBox(height: 4),
+                pw.Text('Module: $_moduleName ($_moduleId)', style: metaStyle),
+                pw.Text('Class: $_className • Classroom: $_moduleClassroomName', style: metaStyle),
+                pw.Text(
+                  'Generated: ${DateFormat('dd/MM/yyyy hh:mm a').format(now)} • Page ${pageIndex + 1}/${sessionPages.length}',
+                  style: metaStyle,
+                ),
+                pw.SizedBox(height: 8),
+                pw.Expanded(
+                  child: pw.Table(
+                    border: pw.TableBorder.all(width: 0.4, color: PdfColors.grey600),
+                    defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
+                    children: tableRows,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    }
+
+    if (sessionPages.isEmpty) {
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4.landscape,
+          build: (_) => pw.Center(child: pw.Text('No sessions for this module')),
+        ),
+      );
+    }
+
     await Printing.layoutPdf(onLayout: (_) async => pdf.save());
   }
 
@@ -531,16 +687,15 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
                   const SizedBox(height: 18),
                   const SectionTitle(title: 'Start Attendance Session'),
                   const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    value: _selectedClassroom,
-                    decoration: const InputDecoration(labelText: 'Classroom', prefixIcon: Icon(Icons.location_city_outlined)),
-                    items: _classrooms
-                        .map((c) => DropdownMenuItem(
-                              value: (c['id'] ?? c['classroom_id'] ?? c['classroomId']).toString(),
-                              child: Text((c['name'] ?? c['room_name'] ?? c['classroomName'] ?? 'Room').toString()),
-                            ))
-                        .toList(),
-                    onChanged: _starting ? null : (v) => setState(() => _selectedClassroom = v),
+                  InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Classroom',
+                      prefixIcon: Icon(Icons.location_city_outlined),
+                    ),
+                    child: Text(
+                      _moduleClassroomName.isEmpty ? _className : _moduleClassroomName,
+                      style: Theme.of(context).textTheme.bodyLarge,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<int>(
@@ -667,24 +822,64 @@ class _ModuleSessionCard extends StatelessWidget {
   }
 }
 
-class _StudentSummary {
+class _SessionColumn {
+  final String id;
+  final String header;
+  final int units;
+
+  const _SessionColumn({required this.id, required this.header, required this.units});
+}
+
+class _ModuleReport {
+  final List<_SessionColumn> sessions;
+  final List<_StudentReportRow> rows;
+
+  const _ModuleReport({required this.sessions, required this.rows});
+}
+
+class _StudentReportRow {
   final String id;
   final String name;
+  int slNo = 0;
   int totalUnits = 0;
   int presentUnits = 0;
   int absentUnits = 0;
   int medicalUnits = 0;
   int officialUnits = 0;
+  final Map<String, String> _statusBySession = {};
 
-  _StudentSummary({required this.id, required this.name});
+  _StudentReportRow({required this.id, required this.name});
 
-  double get presentPercentage => totalUnits == 0 ? 0 : (presentUnits / totalUnits) * 100;
-  double get absentRulePercentage => totalUnits == 0 ? 0 : 100 - ((absentUnits / totalUnits) * 100);
-  double get leaveRulePercentage => totalUnits == 0 ? 0 : 100 - (((absentUnits + medicalUnits + officialUnits) / totalUnits) * 100);
-  bool get isSafe => absentRulePercentage >= 90 && leaveRulePercentage >= 80;
-  String get statusLabel {
-    if (isSafe) return 'Safe';
-    if (absentRulePercentage < 90) return 'Absent > 10%';
-    return 'Leave + Absent > 20%';
+  void applySession(String sessionId, String status, int units) {
+    if (_statusBySession.containsKey(sessionId)) return;
+    _statusBySession[sessionId] = status;
+    totalUnits += units;
+    switch (status) {
+      case 'PRESENT':
+      case 'LATE':
+        presentUnits += units;
+        break;
+      case 'MEDICAL_LEAVE':
+        medicalUnits += units;
+        break;
+      case 'OFFICIAL_LEAVE':
+        officialUnits += units;
+        break;
+      default:
+        absentUnits += units;
+    }
   }
+
+  void ensureSession(String sessionId, int units) {
+    if (!_statusBySession.containsKey(sessionId)) {
+      applySession(sessionId, 'ABSENT', units);
+    }
+  }
+
+  String statusFor(String sessionId) => _statusBySession[sessionId] ?? 'ABSENT';
+
+  double get rule1Percentage => totalUnits == 0 ? 0 : (presentUnits / totalUnits) * 100;
+
+  double get rule2Percentage =>
+      totalUnits == 0 ? 0 : ((totalUnits - absentUnits - medicalUnits - officialUnits) / totalUnits) * 100;
 }

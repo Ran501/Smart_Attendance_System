@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../features/authentication/presentation/screens/login_screen.dart';
@@ -15,11 +16,14 @@ import '../../features/dashboards/presentation/screens/teacher_module_screen.dar
 import '../providers/auth_provider.dart';
 import 'go_router_refresh.dart';
 
+final rootNavigatorKey = GlobalKey<NavigatorState>();
+
 final routerProvider = Provider<GoRouter>((ref) {
   final refresh = GoRouterRefreshNotifier(ref);
   ref.onDispose(refresh.dispose);
 
   return GoRouter(
+    navigatorKey: rootNavigatorKey,
     initialLocation: '/',
     refreshListenable: refresh,
     redirect: (context, state) {

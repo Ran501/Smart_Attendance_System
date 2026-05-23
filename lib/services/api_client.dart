@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+import '../core/auth/session_auth_guard.dart';
 import '../core/config/api_config.dart';
 
 class ApiClient {
@@ -25,23 +27,50 @@ class ApiClient {
               }
               handler.next(options);
             },
+            onResponse: (response, handler) {
+              SessionAuthGuard.reset();
+              handler.next(response);
+            },
             onError: (error, handler) {
-              if (error.response?.statusCode == 401) {
-                _storage.delete(key: 'auth_token');
+              if (error is DioException) {
+                SessionAuthGuard.recordFailure(error);
               }
               handler.next(error);
             },
           ),
         );
 
-  Future<void> saveToken(String token) =>
-      _storage.write(key: 'auth_token', value: token);
+  Future<void> saveToken(String token) async {
+    await _storage.write(key: 'auth_token', value: token);
+    SessionAuthGuard.reset();
+  }
 
-  Future<void> clearToken() => _storage.delete(key: 'auth_token');
+  Future<void> clearToken() async {
+    await _storage.delete(key: 'auth_token');
+    SessionAuthGuard.reset();
+  }
 
   Future<String?> getToken() => _storage.read(key: 'auth_token');
 
   static String messageFromDio(DioException error) {
+    if (SessionAuthGuard.isBusinessUnauthorized(error)) {
+      final data = error.response?.data;
+      if (data is Map) {
+        final msg = data['message'] ?? data['error'];
+        if (msg != null) return msg.toString();
+      }
+    }
+
+    if (SessionAuthGuard.isSessionAuthFailure(error)) {
+      final hint = SessionAuthGuard.authRetryHint();
+      final data = error.response?.data;
+      final serverMsg = data is Map ? data['error']?.toString() : null;
+      if (hint != null) {
+        return '${serverMsg ?? 'Session problem'}. $hint.';
+      }
+      return serverMsg ?? 'Session expired. Please sign in again.';
+    }
+
     final data = error.response?.data;
     if (data is Map) {
       if (data['error'] != null) {

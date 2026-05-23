@@ -134,7 +134,7 @@ async function verifyEmbedding(req, res) {
       minSimilarity: match.minSimilarity,
       threshold,
     });
-    return res.status(401).json({
+    return res.status(403).json({
       verified: false,
       similarity: match.avgSimilarity,
       minSimilarity: match.minSimilarity,

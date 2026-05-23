@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +10,7 @@ import '../../../../core/config/api_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/providers/auth_provider.dart';
 import '../../../../core/providers/theme_provider.dart';
+import '../../../../services/api_client.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
 import '../../../../services/face_registration_service.dart';
@@ -113,14 +115,28 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
         });
         _joinClassRooms();
       }
+    } on DioException catch (e) {
+      if (mounted) {
+        setState(() => _activeSessions = []);
+        final msg = ApiClient.messageFromDio(e);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              e.response?.statusCode == 404
+                  ? 'Could not load sessions. Restart the backend (npm start in backend/).'
+                  : 'Could not load sessions: $msg',
+            ),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _activeSessions = []);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(e.toString().contains('404')
-                ? 'Could not load sessions. Restart the backend (npm start in backend/).'
-                : 'Could not load sessions: $e'),
+            content: Text('Could not load sessions: $e'),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 5),
           ),
