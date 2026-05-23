@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
+import '../../../../services/teacher_ble_beacon_service.dart';
 import '../../../../services/geo_fence_service.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../widgets/enterprise_shell.dart';
@@ -124,6 +125,7 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
         durationMinutes: _durationMinutes,
         sessionUnits: _sessionUnits,
       );
+      await TeacherBleBeaconService.instance.start(session.id);
       if (mounted) {
         final extra = {
           'id': session.id,

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../core/ble/ble_session_beacon.dart';
 import '../core/constants/app_constants.dart';
 
 class BleValidationResult {
@@ -33,15 +34,8 @@ class BleValidationResult {
 
 /// Student-side scan for the teacher's session-specific BLE beacon.
 class BluetoothValidationService {
-  static String beaconName(String sessionId) => 'FacePass-$sessionId';
-
-  static bool nameMatchesSession(String advertisedName, String sessionId) {
-    final name = advertisedName.trim();
-    if (name.isEmpty || sessionId.trim().isEmpty) return false;
-    final expected = beaconName(sessionId);
-    if (name.toLowerCase() == expected.toLowerCase()) return true;
-    return name.toLowerCase().contains(sessionId.trim().toLowerCase());
-  }
+  static String beaconName(String sessionId) =>
+      BleSessionBeacon.displayName(sessionId);
 
   static double estimateDistanceMeters(int rssi) {
     const measuredPower = -55;
@@ -63,7 +57,8 @@ class BluetoothValidationService {
       );
     }
 
-    if (sessionId.trim().isEmpty) {
+    final id = sessionId.trim();
+    if (id.isEmpty) {
       return const BleValidationResult(
         verified: false,
         message: 'Invalid session for Bluetooth check',
@@ -87,15 +82,16 @@ class BluetoothValidationService {
         );
       }
 
-      final expectedBeacon = beaconName(sessionId);
+      final expectedBeacon = beaconName(id);
       ScanResult? best;
+      var sawOurService = false;
 
       final sub = FlutterBluePlus.scanResults.listen((results) {
         for (final result in results) {
-          final name = result.advertisementData.advName.isNotEmpty
-              ? result.advertisementData.advName
-              : result.device.platformName;
-          if (!nameMatchesSession(name, sessionId)) continue;
+          final ad = result.advertisementData;
+          if (!BleSessionBeacon.advertisementMatches(ad, id)) continue;
+
+          sawOurService = true;
 
           if (expectedDeviceId != null &&
               result.device.remoteId.str.toLowerCase() !=
@@ -112,16 +108,46 @@ class BluetoothValidationService {
       await FlutterBluePlus.startScan(
         timeout: timeout,
         androidScanMode: AndroidScanMode.lowLatency,
+        withServices: [BleSessionBeacon.serviceGuid],
+        continuousUpdates: true,
       );
       await Future.delayed(timeout);
+
+      // Fallback: some phones omit service UUID in the filter path — scan all.
+      if (best == null) {
+        await FlutterBluePlus.stopScan();
+        await sub.cancel();
+        final sub2 = FlutterBluePlus.scanResults.listen((results) {
+          for (final result in results) {
+            if (!BleSessionBeacon.advertisementMatches(
+              result.advertisementData,
+              id,
+            )) {
+              continue;
+            }
+            if (best == null || result.rssi > best!.rssi) {
+              best = result;
+            }
+          }
+        });
+        await FlutterBluePlus.startScan(
+          timeout: const Duration(seconds: 6),
+          androidScanMode: AndroidScanMode.lowLatency,
+          continuousUpdates: true,
+        );
+        await Future.delayed(const Duration(seconds: 6));
+        await sub2.cancel();
+      }
+
       await FlutterBluePlus.stopScan();
       await sub.cancel();
 
       if (best == null) {
         return BleValidationResult(
           verified: false,
-          message:
-              'Teacher beacon "$expectedBeacon" not found. Ask your teacher to keep the session screen open with Bluetooth on.',
+          message: sawOurService
+              ? 'Teacher Bluetooth found but signal too weak. Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m and try again.'
+              : 'Teacher beacon "$expectedBeacon" not found. Teacher must open the live session screen, enable Bluetooth, and allow Nearby devices — beacon should show ON.',
         );
       }
 
@@ -130,14 +156,13 @@ class BluetoothValidationService {
           ? best!.advertisementData.advName
           : best!.device.platformName;
       final estM = estimateDistanceMeters(rssi);
-      final verified = rssi >= minimumRssi &&
-          estM <= AppConstants.bleMaxDistanceMeters + 2;
+      final verified = rssi >= minimumRssi;
 
       return BleValidationResult(
         verified: verified,
         bestRssi: rssi,
         deviceId: best!.device.remoteId.str,
-        deviceName: deviceName,
+        deviceName: deviceName.isNotEmpty ? deviceName : expectedBeacon,
         message: verified
             ? 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m of teacher (≈${estM.toStringAsFixed(0)} m)'
             : 'Too far from teacher (≈${estM.toStringAsFixed(0)} m, max ${AppConstants.bleMaxDistanceMeters.toInt()} m). Move closer.',

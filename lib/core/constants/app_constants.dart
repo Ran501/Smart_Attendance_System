@@ -16,7 +16,7 @@ class AppConstants {
   /// Stronger (less negative) RSSI = closer. ~-72 dBm ≈ 10 m for typical phones.
   static const int bleStrongRssi = -65;
   static const int bleMinimumRssi = -72;
-  static const int bleScanSeconds = 8;
+  static const int bleScanSeconds = 12;
 
   /// GPS geofence: base radius the teacher's session covers.
   static const double hostSessionBaseRadiusMeters = 50;

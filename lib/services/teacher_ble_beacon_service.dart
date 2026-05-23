@@ -2,9 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import 'bluetooth_validation_service.dart';
+import '../core/ble/ble_session_beacon.dart';
 
-/// Broadcasts the teacher's session beacon so students can verify ~10 m proximity.
+/// Broadcasts the teacher's session beacon so students can verify proximity.
 class TeacherBleBeaconService {
   TeacherBleBeaconService._();
   static final TeacherBleBeaconService instance = TeacherBleBeaconService._();
@@ -16,21 +16,27 @@ class TeacherBleBeaconService {
 
   Future<bool> start(String sessionId) async {
     if (kIsWeb) return false;
-    _activeSessionId = sessionId;
-    final beaconName = BluetoothValidationService.beaconName(sessionId);
+    final id = sessionId.trim();
+    if (id.isEmpty) return false;
+    _activeSessionId = id;
+
+    final payload = BleSessionBeacon.encodePayload(id);
+    final payloadList = payload.toList();
 
     try {
       final supported = await _peripheral.isSupported;
       if (!supported) {
-        debugPrint('[TeacherBLE] Peripheral advertising not supported on this device');
+        debugPrint('[TeacherBLE] Peripheral advertising not supported');
         return false;
       }
 
       await Permission.bluetoothAdvertise.request();
       await Permission.bluetoothConnect.request();
+      await Permission.bluetoothScan.request();
 
       final perm = await _peripheral.requestPermission();
-      if (perm != BluetoothPeripheralState.granted) {
+      if (perm != BluetoothPeripheralState.granted &&
+          perm != BluetoothPeripheralState.ready) {
         debugPrint('[TeacherBLE] Advertising permission denied: $perm');
         return false;
       }
@@ -39,12 +45,23 @@ class TeacherBleBeaconService {
         await _peripheral.stop();
       }
 
+      // localName works on iOS; Android needs manufacturer/service data.
       final state = await _peripheral.start(
         advertiseData: AdvertiseData(
-          localName: beaconName,
+          localName: BleSessionBeacon.displayName(id),
+          serviceUuid: BleSessionBeacon.serviceGuid.str128,
+          manufacturerId: BleSessionBeacon.manufacturerId,
+          manufacturerData: payload,
+          serviceDataUuid: BleSessionBeacon.serviceGuid.str128,
+          serviceData: payloadList,
+          includeDeviceName: false,
         ),
       );
-      debugPrint('[TeacherBLE] Advertising as "$beaconName" → $state');
+
+      debugPrint(
+        '[TeacherBLE] Advertising session $id (service + manufacturer payload) → $state',
+      );
+
       if (state == BluetoothPeripheralState.granted ||
           state == BluetoothPeripheralState.ready) {
         return await _peripheral.isAdvertising;
