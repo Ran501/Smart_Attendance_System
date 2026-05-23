@@ -3,6 +3,7 @@ const config = require('../config');
 const { generateSessionId, generateSessionToken } = require('../utils/sessionId');
 const { logAudit } = require('../services/auditService');
 const { checkAllStudentsForSubject } = require('../services/attendanceAlertService');
+const { notifyClassSessionStarted } = require('../services/notificationService');
 
 function intInRange(value, min, max, fallback) {
   const parsed = parseInt(value, 10);
@@ -153,6 +154,10 @@ async function createSession(req, res) {
       req.io.to(`session:${sessionId}`).emit('session:started', sessionPayload);
       req.io.to(`class:${classId}`).emit('session:started', sessionPayload);
     }
+
+    notifyClassSessionStarted(classId, sessionPayload).catch((err) => {
+      console.error('[FCM] notifyClassSessionStarted failed:', err.message);
+    });
 
     return res.status(201).json({
       ...sessionPayload,

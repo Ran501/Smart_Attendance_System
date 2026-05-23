@@ -17,65 +17,75 @@ class NotificationService {
   static const _channelName = 'Attendance Alerts';
 
   Future<void> initialize() async {
-    // Request permission (Android 13+, iOS)
     await _fcm.requestPermission(alert: true, badge: true, sound: true);
 
-    // Create Android notification channel
     if (Platform.isAndroid) {
       const channel = AndroidNotificationChannel(
         _channelId,
         _channelName,
-        description: 'Alerts when your attendance is at risk',
+        description: 'Live sessions and attendance alerts',
         importance: Importance.high,
       );
       await _localNotifications
-          .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>()
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
           ?.createNotificationChannel(channel);
     }
 
-    // Init flutter_local_notifications
     const initSettings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: DarwinInitializationSettings(),
     );
     await _localNotifications.initialize(initSettings);
 
-    // Handle notifications when app is in foreground
-    FirebaseMessaging.onMessage.listen(_onForegroundMessage);
+    FirebaseMessaging.onMessage.listen((message) async {
+      await showLocalNotification(message);
+      await unreadCountNotifier.refresh();
+    });
 
-    // Register FCM token with backend
-    await _registerToken();
+    FirebaseMessaging.onMessageOpenedApp.listen((_) => unreadCountNotifier.refresh());
 
-    // Refresh token whenever it rotates
+    await syncTokenWithBackend();
     _fcm.onTokenRefresh.listen(_sendTokenToBackend);
-  }
-
-  Future<void> _onForegroundMessage(RemoteMessage message) async {
-    await showLocalNotification(message);
   }
 
   Future<void> showLocalNotification(RemoteMessage message) async {
     final notification = message.notification;
-    if (notification == null) return;
+    final data = message.data;
+
+    final title = notification?.title ?? data['title'] ?? _titleForType(data['type']);
+    final body = notification?.body ?? data['body'];
+    if (title == null || title.isEmpty || body == null || body.isEmpty) return;
 
     const androidDetails = AndroidNotificationDetails(
       _channelId,
       _channelName,
-      channelDescription: 'Alerts when your attendance is at risk',
+      channelDescription: 'Live sessions and attendance alerts',
       importance: Importance.high,
       priority: Priority.high,
       icon: '@mipmap/ic_launcher',
     );
 
+    const iosDetails = DarwinNotificationDetails();
+
     await _localNotifications.show(
-      notification.hashCode,
-      notification.title,
-      notification.body,
-      const NotificationDetails(android: androidDetails),
+      message.hashCode,
+      title,
+      body,
+      const NotificationDetails(android: androidDetails, iOS: iosDetails),
     );
   }
 
-  Future<void> _registerToken() async {
+  String? _titleForType(String? type) {
+    switch (type) {
+      case 'SESSION_STARTED':
+        return 'Live attendance session';
+      default:
+        return null;
+    }
+  }
+
+  /// Call after login / restore session so backend can send pushes while app is closed.
+  Future<void> syncTokenWithBackend() async {
     try {
       final token = await _fcm.getToken();
       if (token != null) await _sendTokenToBackend(token);
@@ -84,6 +94,8 @@ class NotificationService {
 
   Future<void> _sendTokenToBackend(String token) async {
     try {
+      final hasAuth = await ApiClient.instance.getToken();
+      if (hasAuth == null) return;
       await ApiClient.instance.dio.post(
         '/device/token',
         data: {'token': token},
@@ -91,7 +103,6 @@ class NotificationService {
     } catch (_) {}
   }
 
-  // Fetch unread notification count from backend
   Future<int> fetchUnreadCount() async {
     try {
       final res = await ApiClient.instance.dio.get('/notifications/unread-count');
@@ -101,7 +112,6 @@ class NotificationService {
     }
   }
 
-  // Fetch notification list from backend
   Future<List<Map<String, dynamic>>> fetchNotifications() async {
     try {
       final res = await ApiClient.instance.dio.get('/notifications');
@@ -125,7 +135,6 @@ class NotificationService {
   }
 }
 
-// Provider-friendly notifier for unread count
 class UnreadCountNotifier extends ValueNotifier<int> {
   UnreadCountNotifier() : super(0);
 

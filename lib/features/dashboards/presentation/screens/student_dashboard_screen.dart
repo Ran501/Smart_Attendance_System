@@ -121,7 +121,10 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
   void _connectSocket() {
     _socket = io.io(ApiConfig.socketOrigin, io.OptionBuilder().setTransports(['websocket']).build());
     _socket!.connect();
-    _socket!.on('session:started', (_) => _fetchSessionsFromApi());
+    _socket!.on('session:started', (_) {
+      _fetchSessionsFromApi();
+      unreadCountNotifier.refresh();
+    });
     _socket!.on('session:closed', (_) => _fetchSessionsFromApi());
     _socket!.on('attendance:updated', (_) => _refreshDashboard());
     _socket!.on('attendance:marked', (_) => _refreshDashboard());

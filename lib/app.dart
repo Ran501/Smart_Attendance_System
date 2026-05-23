@@ -8,7 +8,7 @@ import 'core/providers/auth_provider.dart';
 import 'core/providers/theme_provider.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
-import 'services/api_client.dart';
+import 'services/notification_service.dart';
 
 class SmartAttendanceApp extends ConsumerStatefulWidget {
   const SmartAttendanceApp({super.key});
@@ -71,6 +71,15 @@ class _SmartAttendanceAppState extends ConsumerState<SmartAttendanceApp> {
   Widget build(BuildContext context) {
     final router = ref.watch(routerProvider);
     final themeMode = ref.watch(themeModeProvider);
+
+    ref.listen(authStateProvider, (previous, next) {
+      next.whenData((user) async {
+        if (user != null) {
+          await NotificationService.instance.syncTokenWithBackend();
+          await unreadCountNotifier.refresh();
+        }
+      });
+    });
 
     return MaterialApp.router(
       title: AppConstants.appName,

@@ -39,6 +39,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   Color _colorForType(String? type) {
     if (type == null) return Colors.blue;
+    if (type.contains('SESSION')) return Colors.green.shade700;
     if (type.contains('DANGER')) return Colors.red.shade600;
     if (type.contains('WARNING')) return Colors.orange.shade700;
     return Colors.blue.shade700;
@@ -46,6 +47,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   IconData _iconForType(String? type) {
     if (type == null) return Icons.notifications;
+    if (type.contains('SESSION')) return Icons.sensors_rounded;
     if (type.contains('DANGER')) return Icons.warning_rounded;
     if (type.contains('WARNING')) return Icons.info_rounded;
     return Icons.notifications;
