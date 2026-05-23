@@ -115,8 +115,8 @@ class BluetoothValidationService {
       await FlutterBluePlus.stopScan();
       await sub.cancel();
 
-      final median = smoother.median;
-      if (median == null || bestRaw == null) {
+      final rssi = smoother.effectiveRssi;
+      if (rssi == null || bestRaw == null) {
         return BleValidationResult(
           verified: false,
           message: sawBeacon
@@ -125,12 +125,17 @@ class BluetoothValidationService {
         );
       }
 
-      final proximity = BleSessionProximity.fromRssi(
+      var proximity = BleSessionProximity.fromRssi(
         sessionId: id,
-        smoothedRssi: median,
+        smoothedRssi: rssi,
         wasShowing: true,
         wasReady: wasReady,
       );
+      if (proximity.readyToMark || rssi >= AppConstants.bleRssiMarkEnter) {
+        proximity = proximity.withHold(show: true, ready: true);
+      } else if (proximity.showOnDashboard) {
+        proximity = proximity.withHold(show: true, ready: false);
+      }
 
       final deviceName = bestRaw!.advertisementData.advName.isNotEmpty
           ? bestRaw!.advertisementData.advName
@@ -139,16 +144,16 @@ class BluetoothValidationService {
       return BleValidationResult(
         verified: proximity.readyToMark,
         bestRssi: bestRaw!.rssi,
-        smoothedRssi: median,
+        smoothedRssi: rssi,
         estimatedMeters: proximity.estimatedMeters,
         band: proximity.band,
         deviceId: bestRaw!.device.remoteId.str,
         deviceName: deviceName.isNotEmpty ? deviceName : expectedBeacon,
         message: proximity.readyToMark
-            ? 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m (≈${proximity.estimatedMeters?.toStringAsFixed(0) ?? "?"} m, ${median} dBm)'
+            ? 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m (≈${proximity.estimatedMeters?.toStringAsFixed(0) ?? "?"} m, $rssi dBm)'
             : proximity.showOnDashboard
-                ? 'Almost there — move a little closer (${median} dBm, ≈${proximity.estimatedMeters?.toStringAsFixed(0) ?? "?"} m)'
-                : 'Too far from teacher (${median} dBm). Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m.',
+                ? 'Almost there — move a little closer ($rssi dBm, ≈${proximity.estimatedMeters?.toStringAsFixed(0) ?? "?"} m)'
+                : 'Too far from teacher ($rssi dBm). Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m.',
       );
     } catch (e) {
       return BleValidationResult(

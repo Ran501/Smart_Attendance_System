@@ -692,7 +692,7 @@ class _LiveSessionBanner extends StatelessWidget {
     final marked = session['already_marked'] == true;
     final subject = (session['subject_name'] ?? session['subjectName'] ?? 'Active Class').toString();
     final teacher = (session['teacher_name'] ?? session['teacherName'] ?? session['teacher'] ?? 'Teacher').toString();
-    final ready = proximity?.readyToMark ?? false;
+    final ready = proximity?.canMarkAttendance ?? false;
     final proximityLabel = proximity?.bandLabel ??
         'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m';
     final distText = proximity?.estimatedMeters != null

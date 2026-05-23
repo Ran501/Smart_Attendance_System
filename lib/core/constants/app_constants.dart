@@ -10,26 +10,33 @@ class AppConstants {
   static const double faceMatchTop2Ratio = 0.96;
   static const int defaultSessionDurationMinutes = 5;
 
-  /// Attendance proximity: Bluetooth only (max 10 m from teacher phone).
-  static const double bleMaxDistanceMeters = 10;
+  /// Attendance proximity: Bluetooth only (max ~20 m from teacher phone).
+  static const double bleMaxDistanceMeters = 20;
 
-  /// Calibrated Tx power at 1 m (used in log-distance estimate).
-  static const int bleRssiAtOneMeter = -59;
-  static const double blePathLossExponent = 2.35;
+  /// Calibrated Tx power at 1 m (log-distance estimate for UI).
+  static const int bleRssiAtOneMeter = -55;
+  static const double blePathLossExponent = 2.15;
 
-  /// Dashboard: enter "in range" (show session banner).
-  static const int bleRssiShowSessionEnter = -90;
-  static const int bleRssiShowSessionLeave = -94;
+  /// Enter range (show session / enable mark).
+  static const int bleRssiShowSessionEnter = -97;
+  static const int bleRssiMarkEnter = -95;
 
-  /// Mark attendance: stricter band (~within 10 m, stronger signal).
-  static const int bleRssiMarkEnter = -84;
-  static const int bleRssiMarkLeave = -88;
+  /// Leave range — much lower than enter so moving the phone does not flicker UI.
+  static const int bleRssiShowSessionLeave = -108;
+  static const int bleRssiMarkLeave = -106;
 
   /// Server minimum RSSI (align with [bleRssiMarkEnter]).
   static const int bleMinimumRssi = bleRssiMarkEnter;
 
-  static const int bleRssiMedianWindow = 9;
-  static const int bleScanSeconds = 12;
+  /// After a good reading, keep session visible this long (even if RSSI dips while moving).
+  static const int bleSessionHoldSeconds = 180;
+
+  /// Keep "Mark attendance" enabled for this long after a strong reading.
+  static const int bleMarkHoldSeconds = 180;
+
+  /// Rolling RSSI window (small = responsive; hold logic prevents flicker).
+  static const int bleRssiMedianWindow = 7;
+  static const int bleScanSeconds = 10;
 
   /// MobileFaceNet output (runtime-detected; 128 or 192 depending on model file).
   static const int embeddingSize = 192;

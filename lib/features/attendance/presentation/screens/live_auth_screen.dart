@@ -212,7 +212,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   Future<void> _submitAttendance(List<int> bytes, Face face) async {
     setState(() {
       _submitting = true;
-      _instruction = 'Scanning for teacher Bluetooth (within 10 m)...';
+      _instruction = 'Scanning for teacher Bluetooth (within ${AppConstants.bleMaxDistanceMeters.toInt()} m)...';
     });
 
     try {
@@ -412,7 +412,10 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
                   alignment: WrapAlignment.center,
                   children: [
                     _CheckChip(label: 'Face Live', done: _faceVerified),
-                    _CheckChip(label: 'Bluetooth ≤10 m', done: _bleVerified),
+                    _CheckChip(
+                      label: 'Bluetooth ≤${AppConstants.bleMaxDistanceMeters.toInt()} m',
+                      done: _bleVerified,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),

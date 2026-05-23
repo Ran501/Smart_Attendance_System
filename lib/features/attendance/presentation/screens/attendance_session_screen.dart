@@ -394,7 +394,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
                   const SizedBox(height: 8),
                   Text(
                     _beaconActive
-                        ? 'Broadcasting now — students must be within 10 m of your phone to mark attendance.'
+                        ? 'Broadcasting now — students must be within ${AppConstants.bleMaxDistanceMeters.toInt()} m of your phone to mark attendance.'
                         : 'Beacon not active. Turn on Bluetooth and tap refresh, or reopen this session.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),

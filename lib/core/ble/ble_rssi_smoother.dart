@@ -1,8 +1,11 @@
 import 'dart:math' as math;
 
-/// Rolling RSSI buffer; uses median to ignore single-packet spikes.
+import '../constants/app_constants.dart';
+
+/// Rolling RSSI buffer; median + peak for fast, stable proximity.
 class BleRssiSmoother {
-  BleRssiSmoother({this.windowSize = 9});
+  BleRssiSmoother({int? windowSize})
+      : windowSize = windowSize ?? AppConstants.bleRssiMedianWindow;
 
   final int windowSize;
   final List<int> _samples = [];
@@ -18,13 +21,19 @@ class BleRssiSmoother {
 
   bool get hasSamples => _samples.isNotEmpty;
 
-  /// Median RSSI, or null if no samples yet.
   int? get median {
     if (_samples.isEmpty) return null;
     final sorted = List<int>.from(_samples)..sort();
     return sorted[sorted.length ~/ 2];
   }
 
-  /// Best (strongest) sample in the window — used when median is borderline.
   int? get peak => _samples.isEmpty ? null : _samples.reduce(math.max);
+
+  /// Best estimate for gating: strongest recent reading (fast when close).
+  int? get effectiveRssi {
+    if (_samples.isEmpty) return null;
+    final m = median!;
+    final p = peak!;
+    return math.max(m, p);
+  }
 }

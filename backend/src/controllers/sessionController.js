@@ -129,7 +129,7 @@ async function createSession(req, res) {
       bleRequired: true,
       ble_beacon_name: bleBeaconName,
       bleBeaconName,
-      ble_max_distance_meters: 10,
+      ble_max_distance_meters: 20,
       classId,
       class_id: classId,
       subjectId,
@@ -231,7 +231,7 @@ function mapSessionForClient(row) {
     bleRequired: true,
     ble_beacon_name: beaconName,
     bleBeaconName: beaconName,
-    ble_max_distance_meters: 10,
+    ble_max_distance_meters: 20,
   };
 }
 

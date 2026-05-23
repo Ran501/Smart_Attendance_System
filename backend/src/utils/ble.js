@@ -1,12 +1,12 @@
-const BLE_MAX_DISTANCE_METERS = parseFloat(process.env.BLE_MAX_DISTANCE_METERS || '10');
-const BLE_MIN_RSSI = parseInt(process.env.BLE_MIN_RSSI || '-84', 10);
+const BLE_MAX_DISTANCE_METERS = parseFloat(process.env.BLE_MAX_DISTANCE_METERS || '20');
+const BLE_MIN_RSSI = parseInt(process.env.BLE_MIN_RSSI || '-95', 10);
 
 function validateBleProximity({ bleVerified, bleRssi }) {
   if (bleVerified !== true) {
     return {
       valid: false,
       reason:
-        'Bluetooth proximity required — stay within 10 m of your teacher\'s phone with Bluetooth on',
+        `Bluetooth proximity required — stay within ${BLE_MAX_DISTANCE_METERS} m of your teacher's phone with Bluetooth on`,
     };
   }
   const rssi = bleRssi != null ? Number(bleRssi) : null;

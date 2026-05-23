@@ -3,16 +3,9 @@ import 'ble_distance.dart';
 
 /// Proximity band for UI and gating.
 enum BleProximityBand {
-  /// No beacon or signal too weak.
   outOfRange,
-
-  /// Beacon seen but below "show session" threshold (moving closer).
   weak,
-
-  /// Within ~10 m — show session on dashboard.
   nearby,
-
-  /// Strong signal — safe to mark attendance.
   readyToMark,
 }
 
@@ -23,6 +16,7 @@ class BleSessionProximity {
   final double? estimatedMeters;
   final bool showOnDashboard;
   final bool readyToMark;
+  final bool heldInRange;
 
   const BleSessionProximity({
     required this.sessionId,
@@ -31,6 +25,7 @@ class BleSessionProximity {
     this.estimatedMeters,
     required this.showOnDashboard,
     required this.readyToMark,
+    this.heldInRange = false,
   });
 
   static BleSessionProximity outOfRange(String sessionId) => BleSessionProximity(
@@ -49,11 +44,9 @@ class BleSessionProximity {
     final meters = estimateBleDistanceMeters(smoothedRssi);
 
     var show = wasShowing;
-    if (!wasShowing &&
-        smoothedRssi >= AppConstants.bleRssiShowSessionEnter) {
+    if (!wasShowing && smoothedRssi >= AppConstants.bleRssiShowSessionEnter) {
       show = true;
-    } else if (wasShowing &&
-        smoothedRssi < AppConstants.bleRssiShowSessionLeave) {
+    } else if (wasShowing && smoothedRssi < AppConstants.bleRssiShowSessionLeave) {
       show = false;
     }
 
@@ -85,18 +78,48 @@ class BleSessionProximity {
     );
   }
 
-  /// Show session card while approaching or in range (mark still gated by [readyToMark]).
-  bool get visibleOnDashboard =>
-      showOnDashboard || band == BleProximityBand.weak;
+  BleSessionProximity withHold({
+    required bool show,
+    required bool ready,
+  }) {
+    BleProximityBand band;
+    if (ready) {
+      band = BleProximityBand.readyToMark;
+    } else if (show) {
+      band = BleProximityBand.nearby;
+    } else {
+      band = BleProximityBand.outOfRange;
+    }
+    return BleSessionProximity(
+      sessionId: sessionId,
+      band: band,
+      smoothedRssi: smoothedRssi,
+      estimatedMeters: estimatedMeters,
+      showOnDashboard: show,
+      readyToMark: ready,
+      heldInRange: true,
+    );
+  }
+
+  /// Stable dashboard visibility (no flicker when moving phone).
+  bool get visibleOnDashboard => showOnDashboard;
+
+  /// Can tap Mark attendance while session is visible (server re-checks BLE on submit).
+  bool get canMarkAttendance => showOnDashboard;
 
   String get bandLabel {
+    if (heldInRange && readyToMark) {
+      return 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m · ready';
+    }
     switch (band) {
       case BleProximityBand.readyToMark:
-        return 'Strong signal · ready';
+        return 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m · ready';
       case BleProximityBand.nearby:
-        return 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m';
+        return heldInRange
+            ? 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m'
+            : 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m';
       case BleProximityBand.weak:
-        return 'Weak signal · move closer';
+        return 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m';
       case BleProximityBand.outOfRange:
         return 'Out of range';
     }
