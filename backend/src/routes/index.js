@@ -8,6 +8,7 @@ const sessionController = require('../controllers/sessionController');
 const attendanceController = require('../controllers/attendanceController');
 const analyticsController = require('../controllers/analyticsController');
 const moduleController = require('../controllers/moduleController');
+const notificationController = require('../controllers/notificationController');
 
 const router = express.Router();
 
@@ -132,6 +133,12 @@ router.post('/attendance/update', authenticate, authorize('teacher', 'admin'), a
 router.patch('/attendance/:recordId/status', authenticate, authorize('teacher', 'admin'), attendanceController.updateAttendanceStatus);
 router.patch('/attendance/:recordId', authenticate, authorize('teacher', 'admin'), attendanceController.updateAttendanceStatus);
 router.patch('/attendance/records/:recordId', authenticate, authorize('teacher', 'admin'), attendanceController.updateAttendanceStatus);
+
+// Notifications
+router.post('/device/token', authenticate, notificationController.registerToken);
+router.get('/notifications', authenticate, notificationController.listNotifications);
+router.get('/notifications/unread-count', authenticate, notificationController.unreadCount);
+router.patch('/notifications/:id/read', authenticate, notificationController.markRead);
 
 // Analytics & admin
 router.get(

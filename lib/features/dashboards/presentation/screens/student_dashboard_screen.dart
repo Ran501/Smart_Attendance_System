@@ -11,6 +11,8 @@ import '../../../../core/providers/auth_provider.dart';
 import '../../../../core/providers/theme_provider.dart';
 import '../../../../services/api_client.dart';
 import '../../../../services/attendance_service.dart';
+import '../../../../services/notification_service.dart';
+import '../../../notifications/notification_screen.dart';
 import '../../../../core/ble/ble_proximity_state.dart';
 import '../../../../services/ble_proximity_monitor.dart';
 import '../../../../services/catalog_service.dart';
@@ -48,6 +50,7 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     _load();
     _connectSocket();
     _proximitySub = _proximityMonitor.stream.listen(_onProximityUpdate);
+    unreadCountNotifier.refresh();
     _sessionRefreshTimer =
         Timer.periodic(const Duration(seconds: 25), (_) => _fetchSessionsFromApi());
   }
@@ -301,10 +304,40 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
       appBar: AppBar(
         title: const Text(AppConstants.appName),
         actions: [
-          IconButton(
-            tooltip: 'Notifications',
-            icon: const Icon(Icons.notifications_none_rounded),
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Notification center will use the existing realtime channel.'))),
+          ValueListenableBuilder<int>(
+            valueListenable: unreadCountNotifier,
+            builder: (context, count, _) => Stack(
+              clipBehavior: Clip.none,
+              children: [
+                IconButton(
+                  tooltip: 'Notifications',
+                  icon: const Icon(Icons.notifications_none_rounded),
+                  onPressed: () {
+                    Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => const NotificationScreen(),
+                    ));
+                  },
+                ),
+                if (count > 0)
+                  Positioned(
+                    right: 6,
+                    top: 6,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                      child: Text(
+                        count > 99 ? '99+' : '$count',
+                        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
           IconButton(
             tooltip: 'Theme',

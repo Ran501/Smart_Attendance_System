@@ -4,6 +4,7 @@ const { validateBleProximity } = require('../utils/ble');
 const { upsertAttendanceRecord, setAttendanceStatus } = require('../utils/dbCompat');
 const { evaluateFaceMatch } = require('../utils/face');
 const { logAudit, logFraud } = require('../services/auditService');
+const { checkAndAlertStudent } = require('../services/attendanceAlertService');
 const { expireStaleSessions } = require('./sessionController');
 const { buildStudentModules } = require('./moduleController');
 
@@ -386,6 +387,21 @@ async function updateAttendanceStatus(req, res) {
     }
 
     res.json({ ok: true, ...payload });
+
+    // Fire attendance alert after response (non-blocking)
+    const finalStudentId = payload.studentId;
+    if (finalStudentId) {
+      const subjectResult = await pool.query(
+        'SELECT subject_id FROM attendance_sessions WHERE id = $1',
+        [sessionId],
+      );
+      const subjectId = subjectResult.rows[0]?.subject_id;
+      if (subjectId) {
+        checkAndAlertStudent(finalStudentId, subjectId).catch((err) =>
+          console.error('[alert] checkAndAlertStudent failed:', err.message),
+        );
+      }
+    }
   } catch (err) {
     console.error('[attendance] updateAttendanceStatus failed:', err);
     res.status(500).json({

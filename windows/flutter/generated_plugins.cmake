@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   connectivity_plus
+  firebase_core
   flutter_ble_peripheral
   flutter_secure_storage_windows
   permission_handler_windows

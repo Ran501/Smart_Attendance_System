@@ -2,6 +2,7 @@ const pool = require('../database/pool');
 const config = require('../config');
 const { generateSessionId, generateSessionToken } = require('../utils/sessionId');
 const { logAudit } = require('../services/auditService');
+const { checkAllStudentsForSubject } = require('../services/attendanceAlertService');
 
 function intInRange(value, min, max, fallback) {
   const parsed = parseInt(value, 10);
@@ -211,15 +212,24 @@ async function getSession(req, res) {
 
 async function closeSession(req, res) {
   const { sessionId } = req.params;
-  await pool.query(
+  const updated = await pool.query(
     `UPDATE attendance_sessions SET status = 'closed', closed_at = NOW()
-     WHERE id = $1 AND teacher_id = $2`,
+     WHERE id = $1 AND teacher_id = $2
+     RETURNING subject_id`,
     [sessionId, req.user.id],
   );
   if (req.io) {
     req.io.to(`session:${sessionId}`).emit('session:closed', { sessionId });
   }
   res.json({ message: 'Session closed' });
+
+  // Fire attendance alerts after response is sent (non-blocking)
+  const subjectId = updated.rows[0]?.subject_id;
+  if (subjectId) {
+    checkAllStudentsForSubject(subjectId).catch((err) =>
+      console.error('[alert] checkAllStudentsForSubject failed:', err.message),
+    );
+  }
 }
 
 function mapSessionForClient(row) {

@@ -36,6 +36,10 @@ dependencies:
   google_fonts: ^6.2.1
   crypto: ^3.0.6
 
+  firebase_core: ^3.13.1
+  firebase_messaging: ^15.2.5
+  flutter_local_notifications: ^18.0.1
+
   flutter_blue_plus: ^1.35.5
   flutter_ble_peripheral: ^1.2.6
   fl_chart: ^0.69.2

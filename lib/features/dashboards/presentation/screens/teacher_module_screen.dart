@@ -10,8 +10,10 @@ import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
 import '../../../../services/teacher_ble_beacon_service.dart';
 import '../../../../widgets/app_button.dart';
+import '../../../../services/notification_service.dart';
 import '../../../../widgets/enterprise_shell.dart';
 import '../../../../widgets/session_timer.dart';
+import '../../../notifications/notification_screen.dart';
 
 class TeacherModuleScreen extends StatefulWidget {
   final Map<String, dynamic> module;
@@ -39,6 +41,7 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
   void initState() {
     super.initState();
     _load();
+    unreadCountNotifier.refresh();
   }
 
   String get _moduleId {
@@ -650,6 +653,35 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
         title: Text(_moduleName),
         leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => context.pop()),
         actions: [
+          ValueListenableBuilder<int>(
+            valueListenable: unreadCountNotifier,
+            builder: (context, count, _) => Stack(
+              clipBehavior: Clip.none,
+              children: [
+                IconButton(
+                  tooltip: 'Notifications',
+                  icon: const Icon(Icons.notifications_none_rounded),
+                  onPressed: () => Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const NotificationScreen())),
+                ),
+                if (count > 0)
+                  Positioned(
+                    right: 6,
+                    top: 6,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                      child: Text(
+                        count > 99 ? '99+' : '$count',
+                        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
           IconButton(
             tooltip: 'Module analytics',
             icon: const Icon(Icons.analytics_outlined),

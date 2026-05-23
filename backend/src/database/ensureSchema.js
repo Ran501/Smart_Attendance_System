@@ -53,6 +53,29 @@ async function ensureRuntimeSchema() {
     `ALTER TABLE attendance_sessions DROP COLUMN IF EXISTS qr_payload;`,
     `CREATE INDEX IF NOT EXISTS idx_sessions_subject ON attendance_sessions(subject_id);`,
     `CREATE INDEX IF NOT EXISTS idx_subjects_teacher ON subjects(teacher_id);`,
+
+    // FCM device tokens — one row per user+device
+    `CREATE TABLE IF NOT EXISTS device_tokens (
+       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       token       TEXT NOT NULL,
+       updated_at  TIMESTAMPTZ DEFAULT NOW(),
+       UNIQUE(user_id, token)
+     );`,
+    `CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id);`,
+
+    // In-app notification history
+    `CREATE TABLE IF NOT EXISTS notifications (
+       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       type        TEXT NOT NULL,
+       title       TEXT NOT NULL,
+       body        TEXT NOT NULL,
+       data        JSONB DEFAULT '{}',
+       is_read     BOOLEAN DEFAULT FALSE,
+       created_at  TIMESTAMPTZ DEFAULT NOW()
+     );`,
+    `CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC);`,
   ];
 
   for (const sql of statements) {
