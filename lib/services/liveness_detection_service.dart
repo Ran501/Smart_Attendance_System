@@ -115,7 +115,8 @@ class LivenessDetectionService {
     Face face, {
     required bool isLeft,
   }) {
-    final yaw = face.headEulerAngleY ?? 0;
+    // Front camera: ML Kit yaw is mirrored vs the user's left/right.
+    final yaw = -(face.headEulerAngleY ?? 0);
     const threshold = 15.0;
 
     if (isLeft) {

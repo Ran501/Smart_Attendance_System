@@ -232,13 +232,13 @@ async function submitAttendance(req, res) {
       wifiValid: true,
       deviceValid: true,
       livenessPassed: true,
-      reason: `Face match below threshold (avg ${(faceMatch.avgSimilarity * 100).toFixed(1)}%)`,
+      reason: `Face match below threshold (best ${(faceMatch.maxSimilarity * 100).toFixed(1)}%)`,
     });
     return res.status(403).json({
       accepted: false,
       reason:
-        `Face not recognized (avg ${(faceMatch.avgSimilarity * 100).toFixed(1)}%, ` +
-        `weakest ${(faceMatch.minSimilarity * 100).toFixed(1)}% — need ${(threshold * 100).toFixed(0)}% avg)`,
+        `Face not recognized (best ${(faceMatch.maxSimilarity * 100).toFixed(1)}%, ` +
+        `need ${(threshold * 100).toFixed(0)}% or higher)`,
       confidence: faceMatch.avgSimilarity,
       minSimilarity: faceMatch.minSimilarity,
     });

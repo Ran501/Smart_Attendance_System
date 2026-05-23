@@ -11,7 +11,8 @@
     "db:seed": "node src/database/seed.js",
     "db:migrate:facepass": "node src/database/run-migration.js 003_facepass_module_flow.sql",
     "db:migrate:no-qr": "node src/database/run-migration.js 004_remove_qr_payload.sql",
-    "db:repair": "node src/database/run-migration.js 005_repair_live_session_columns.sql"
+    "db:repair": "node src/database/run-migration.js 005_repair_live_session_columns.sql",
+    "face:eval": "node scripts/face-metrics-eval.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

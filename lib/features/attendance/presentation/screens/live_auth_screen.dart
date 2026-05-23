@@ -52,6 +52,8 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   bool _bleVerified = false;
   bool _wifiVerified = false;
   bool _locationVerified = false;
+  Uint8List? _identityCaptureBytes;
+  Face? _identityCaptureFace;
 
   @override
   void initState() {
@@ -150,6 +152,12 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
 
       if (!result.completed) return;
 
+      // Match against registration using a frontal smile frame, not the last head-turn.
+      if (_challenges[_challengeIndex] == LivenessChallenge.smile) {
+        _identityCaptureBytes = Uint8List.fromList(bytes);
+        _identityCaptureFace = face;
+      }
+
       if (_challengeIndex < _challenges.length - 1) {
         _challengeIndex++;
         _liveness.startChallenge(_challenges[_challengeIndex]);
@@ -171,7 +179,10 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         });
       }
 
-      await _submitAttendance(bytes, face);
+      await _submitAttendance(
+        _identityCaptureBytes ?? Uint8List.fromList(bytes),
+        _identityCaptureFace ?? face,
+      );
     } catch (e) {
       if (mounted) setState(() => _instruction = 'Camera check failed: $e');
     } finally {
@@ -300,10 +311,8 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       );
       if (!verify.verified) {
         final avg = verify.similarity ?? 0;
-        final min = verify.minSimilarity;
-        final pct = min != null
-            ? ' (avg ${(avg * 100).toStringAsFixed(0)}%, weakest ${(min * 100).toStringAsFixed(0)}% — need ${(AppConstants.faceMatchThreshold * 100).toStringAsFixed(0)}% avg)'
-            : ' (${(avg * 100).toStringAsFixed(0)}% match, need ${(AppConstants.faceMatchThreshold * 100).toStringAsFixed(0)}% or higher)';
+        final pct =
+            ' (${(avg * 100).toStringAsFixed(0)}% best match, need ${(AppConstants.faceMatchThreshold * 100).toStringAsFixed(0)}% or higher)';
         _showResult(
           false,
           'Face does not match your registered profile$pct. '

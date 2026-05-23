@@ -1,5 +1,11 @@
+const {
+  prepareEmbedding,
+  buildEnrollmentTemplate,
+  FACE_PREPROCESS_SPEC,
+} = require('./facePreprocess');
+
 /**
- * Cosine similarity between two embedding vectors.
+ * Cosine similarity between two L2-normalized embedding vectors.
  */
 function cosineSimilarity(a, b) {
   if (!a?.length || !b?.length || a.length !== b.length) return 0;
@@ -16,61 +22,78 @@ function cosineSimilarity(a, b) {
 }
 
 function averageEmbeddings(embeddings) {
-  if (!embeddings.length) return [];
-  const dim = embeddings[0].length;
-  const sum = new Array(dim).fill(0);
-  for (const emb of embeddings) {
-    for (let i = 0; i < dim; i++) sum[i] += emb[i];
-  }
-  return sum.map((v) => v / embeddings.length);
+  return buildEnrollmentTemplate(embeddings);
 }
 
 /**
- * Strict match: average across all enrolled poses must pass, and the weakest
- * pose must be close to the threshold (stops "one lucky angle" false accepts).
+ * Match live embedding against stored template (preferred) or legacy pose rows.
  */
 function evaluateFaceMatch(liveEmbedding, storedEmbeddings, threshold) {
-  if (!storedEmbeddings?.length) {
+  const empty = {
+    similarity: 0,
+    avgSimilarity: 0,
+    minSimilarity: 0,
+    maxSimilarity: 0,
+    top2AvgSimilarity: 0,
+    matched: false,
+    embeddingId: null,
+    matchMode: 'none',
+  };
+
+  if (!storedEmbeddings?.length) return empty;
+
+  const live = prepareEmbedding(liveEmbedding);
+  const templateRow = storedEmbeddings.find(
+    (row) => String(row.angleType || row.angle_type || '').toLowerCase() === 'template',
+  );
+
+  if (templateRow) {
+    const stored = prepareEmbedding(templateRow.embedding);
+    const similarity = cosineSimilarity(live, stored);
     return {
-      similarity: 0,
-      avgSimilarity: 0,
-      minSimilarity: 0,
-      maxSimilarity: 0,
-      matched: false,
-      embeddingId: null,
+      similarity,
+      avgSimilarity: similarity,
+      minSimilarity: similarity,
+      maxSimilarity: similarity,
+      top2AvgSimilarity: similarity,
+      matched: similarity >= threshold,
+      embeddingId: templateRow.id,
+      matchMode: 'template',
     };
   }
 
-  const scores = storedEmbeddings.map((stored) => ({
-    id: stored.id,
-    similarity: cosineSimilarity(liveEmbedding, stored.embedding),
-  }));
+  const scores = storedEmbeddings
+    .filter((row) => String(row.angleType || row.angle_type || '').toLowerCase() !== 'template')
+    .map((stored) => ({
+      id: stored.id,
+      similarity: cosineSimilarity(live, prepareEmbedding(stored.embedding)),
+    }));
 
-  const values = scores.map((s) => s.similarity);
-  const maxSimilarity = Math.max(...values);
-  const minSimilarity = Math.min(...values);
-  const avgSimilarity =
-    values.reduce((sum, v) => sum + v, 0) / values.length;
+  if (!scores.length) return empty;
 
-  const minRequired = threshold * 0.88;
-  const matched =
-    avgSimilarity >= threshold &&
-    minSimilarity >= minRequired &&
-    maxSimilarity >= threshold;
-
+  const values = scores.map((s) => s.similarity).sort((a, b) => b - a);
+  const maxSimilarity = values[0];
+  const minSimilarity = values[values.length - 1];
+  const avgSimilarity = values.reduce((sum, v) => sum + v, 0) / values.length;
+  const top2AvgSimilarity =
+    values.length >= 2 ? (values[0] + values[1]) / 2 : values[0];
+  const top2Min = threshold * 0.96;
+  const matched = maxSimilarity >= threshold && top2AvgSimilarity >= top2Min;
   const best = scores.reduce((a, b) => (b.similarity > a.similarity ? b : a));
 
   return {
-    similarity: avgSimilarity,
+    similarity: maxSimilarity,
     avgSimilarity,
     minSimilarity,
     maxSimilarity,
+    top2AvgSimilarity,
     matched,
     embeddingId: best.id,
+    matchMode: 'legacy-poses',
   };
 }
 
-/** @deprecated Use evaluateFaceMatch — kept for tests */
+/** @deprecated Use evaluateFaceMatch */
 function findBestMatch(liveEmbedding, storedEmbeddings, threshold) {
   const result = evaluateFaceMatch(liveEmbedding, storedEmbeddings, threshold);
   return {
@@ -87,4 +110,5 @@ module.exports = {
   averageEmbeddings,
   evaluateFaceMatch,
   findBestMatch,
+  FACE_PREPROCESS_SPEC,
 };

@@ -5,8 +5,8 @@ class AppConstants {
   /// Server uses the same value via FACE_MATCH_THRESHOLD (cosine similarity).
   static const double faceMatchThreshold = 0.75;
 
-  /// Weakest enrolled pose must reach at least threshold × this (server-side too).
-  static const double faceMatchMinPoseRatio = 0.88;
+  /// Server also requires top-2 enrolled poses to average ≥ threshold × this.
+  static const double faceMatchTop2Ratio = 0.96;
   static const int defaultSessionDurationMinutes = 5;
 
   /// Existing backend radius is still used. BLE adds an extra proximity signal.
@@ -19,6 +19,7 @@ class AppConstants {
   static const int bleMinimumRssi = -78;
   static const int bleScanSeconds = 5;
 
+  /// MobileFaceNet output (runtime-detected; 128 or 192 depending on model file).
   static const int embeddingSize = 192;
   static const String tfliteModelPath = 'assets/models/mobile_face_net.tflite';
   static const int inputSize = 112;

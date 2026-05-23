@@ -85,6 +85,7 @@ class FaceRegistrationService {
 
       final map = data.cast<String, dynamic>();
       final registered = map['registered'] as bool? ?? false;
+      final hasTemplate = map['hasTemplate'] as bool? ?? false;
       final count = map['count'] as int? ?? 0;
       final embeddings = map['embeddings'];
       final embCount = embeddings is List ? embeddings.length : 0;
@@ -94,6 +95,7 @@ class FaceRegistrationService {
         '[FaceRegistration] status registered=$registered count=$count embCount=$embCount',
       );
 
+      if (hasTemplate) return true;
       if (registered && total >= 5) return true;
       if (total >= 5) return true;
       if (registered && total > 0) return true;
@@ -140,13 +142,7 @@ class FaceRegistrationService {
     final minSimilarity = (data['minSimilarity'] as num?)?.toDouble();
     final maxSimilarity = (data['maxSimilarity'] as num?)?.toDouble();
     final serverVerified = data['verified'] as bool? ?? false;
-    final threshold = (data['threshold'] as num?)?.toDouble() ??
-        AppConstants.faceMatchThreshold;
-    final minRequired = threshold * AppConstants.faceMatchMinPoseRatio;
-    final minOk =
-        minSimilarity == null || minSimilarity >= minRequired;
-    final verified =
-        serverVerified && similarity >= threshold && minOk;
+    final verified = serverVerified;
 
     return FaceVerifyResult(
       verified: verified,
