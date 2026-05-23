@@ -9,9 +9,7 @@ class AttendanceSessionModel {
   final int? presentCount;
   final String? className;
   final String? subjectName;
-  final double? hostLatitude;
-  final double? hostLongitude;
-  final int? radiusMeters;
+  final String? bleBeaconName;
 
   const AttendanceSessionModel({
     required this.id,
@@ -24,9 +22,7 @@ class AttendanceSessionModel {
     this.presentCount,
     this.className,
     this.subjectName,
-    this.hostLatitude,
-    this.hostLongitude,
-    this.radiusMeters,
+    this.bleBeaconName,
   });
 
   factory AttendanceSessionModel.fromJson(Map<String, dynamic> json) {
@@ -45,11 +41,7 @@ class AttendanceSessionModel {
       presentCount: json['present_count'] as int?,
       className: json['class_name'] as String?,
       subjectName: json['subject_name'] as String?,
-      hostLatitude: (json['host_latitude'] as num?)?.toDouble() ??
-          (json['hostLatitude'] as num?)?.toDouble(),
-      hostLongitude: (json['host_longitude'] as num?)?.toDouble() ??
-          (json['hostLongitude'] as num?)?.toDouble(),
-      radiusMeters: json['radius_meters'] as int? ?? json['radiusMeters'] as int?,
+      bleBeaconName: json['ble_beacon_name'] as String? ?? json['bleBeaconName'] as String?,
     );
   }
 

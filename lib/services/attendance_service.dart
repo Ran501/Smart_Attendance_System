@@ -10,11 +10,7 @@ class AttendanceService {
     required String classId,
     required String subjectId,
     required String classroomId,
-    double? latitude,
-    double? longitude,
-    double? accuracy,
     int durationMinutes = 5,
-    int? radiusMeters,
     int sessionUnits = 1,
   }) async {
     final safeUnits = sessionUnits.clamp(1, 3).toInt();
@@ -29,10 +25,6 @@ class AttendanceService {
         'session_units': safeUnits,
         'periodCount': safeUnits,
         'blockPeriods': safeUnits,
-        if (latitude != null) 'latitude': latitude,
-        if (longitude != null) 'longitude': longitude,
-        if (accuracy != null) 'accuracy': accuracy,
-        if (radiusMeters != null) 'radiusMeters': radiusMeters,
       });
       return AttendanceSessionModel.fromJson(res.data as Map<String, dynamic>);
     } on DioException catch (e) {

@@ -1,4 +1,5 @@
 -- Smart Attendance Management System - PostgreSQL Schema
+-- Legacy GPS/Wi-Fi columns may exist in DB; the app uses Bluetooth-only for attendance.
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -48,8 +49,8 @@ CREATE TABLE classrooms (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255) NOT NULL,
     class_id VARCHAR(50) REFERENCES classes(id),
-    latitude DOUBLE PRECISION NOT NULL,
-    longitude DOUBLE PRECISION NOT NULL,
+    latitude DOUBLE PRECISION NOT NULL DEFAULT 0,
+    longitude DOUBLE PRECISION NOT NULL DEFAULT 0,
     radius_meters INTEGER DEFAULT 30,
     allowed_wifi_ssid VARCHAR(255),
     allowed_wifi_bssid VARCHAR(50),
@@ -93,7 +94,8 @@ CREATE TABLE attendance_sessions (
     closed_at TIMESTAMPTZ,
     host_latitude DOUBLE PRECISION,
     host_longitude DOUBLE PRECISION,
-    radius_meters INTEGER DEFAULT 100
+    radius_meters INTEGER DEFAULT 100,
+    host_accuracy DOUBLE PRECISION
 );
 
 CREATE INDEX idx_sessions_status ON attendance_sessions(status);
@@ -110,6 +112,8 @@ CREATE TABLE attendance_records (
     longitude DOUBLE PRECISION,
     geo_valid BOOLEAN,
     wifi_valid BOOLEAN,
+    ble_verified BOOLEAN,
+    ble_rssi INTEGER,
     device_valid BOOLEAN,
     liveness_passed BOOLEAN,
     rejection_reason TEXT,
@@ -128,8 +132,7 @@ CREATE TABLE fraud_logs (
     user_id UUID REFERENCES users(id),
     session_id VARCHAR(50),
     attempt_type VARCHAR(100) NOT NULL,
-    details JSONB,
-    ip_address VARCHAR(45),
+    metadata JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -137,15 +140,8 @@ CREATE TABLE audit_logs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id),
     action VARCHAR(100) NOT NULL,
-    resource_type VARCHAR(50),
-    resource_id VARCHAR(100),
+    entity_type VARCHAR(50),
+    entity_id VARCHAR(100),
     metadata JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
-CREATE TABLE session_sequence (
-    prefix VARCHAR(20) PRIMARY KEY,
-    last_number INTEGER DEFAULT 0
-);
-
-INSERT INTO session_sequence (prefix, last_number) VALUES ('ATT', 0);

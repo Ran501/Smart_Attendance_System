@@ -1,10 +1,7 @@
 const pool = require('../database/pool');
 const config = require('../config');
 const { generateSessionId, generateSessionToken } = require('../utils/sessionId');
-const { DEFAULT_HOST_RADIUS } = require('../utils/geo');
 const { logAudit } = require('../services/auditService');
-
-const DEFAULT_HOST_RADIUS_METERS = DEFAULT_HOST_RADIUS;
 
 function intInRange(value, min, max, fallback) {
   const parsed = parseInt(value, 10);
@@ -30,11 +27,11 @@ function pgErrorMessage(err) {
   if (!err) return 'Unknown server error';
   if (err.code === '23503') return 'Selected class, module, or classroom does not exist.';
   if (err.code === '22P02') return 'Invalid classroom value. Refresh the module page and try again.';
-  if (err.code === '42703') return 'Database schema is missing a required column. Restart the backend so the repair migration can run.';
+  if (err.code === '42703') return 'Database schema is missing a required column. Restart the backend so migrations can run.';
   return err.message || 'Server failed to create attendance session.';
 }
 
-async function ensureClassroomId(classId, requestedClassroomId, latitude, longitude) {
+async function ensureClassroomId(classId, requestedClassroomId) {
   if (isUuid(requestedClassroomId)) {
     const found = await pool.query(
       'SELECT id FROM classrooms WHERE id = $1 AND class_id = $2 LIMIT 1',
@@ -49,13 +46,12 @@ async function ensureClassroomId(classId, requestedClassroomId, latitude, longit
   );
   if (existing.rows.length) return existing.rows[0].id;
 
-  const lat = latitude != null && latitude !== '' ? parseFloat(latitude) : 0;
-  const lon = longitude != null && longitude !== '' ? parseFloat(longitude) : 0;
+  // Legacy columns kept for Neon DB compatibility; values are not used (BLE-only attendance).
   const created = await pool.query(
     `INSERT INTO classrooms (name, class_id, latitude, longitude, radius_meters)
-     VALUES ($1, $2, $3, $4, $5)
+     VALUES ($1, $2, 0, 0, 100)
      RETURNING id`,
-    ['Default Classroom', classId, lat, lon, 100],
+    ['Default Classroom', classId],
   );
   return created.rows[0].id;
 }
@@ -70,27 +66,8 @@ async function expireStaleSessions() {
 async function createSession(req, res) {
   try {
     await expireStaleSessions();
-    const {
-      classId,
-      subjectId,
-      classroomId,
-      durationMinutes,
-      latitude,
-      longitude,
-      radiusMeters,
-      accuracy,
-    } = req.body;
+    const { classId, subjectId, classroomId, durationMinutes } = req.body;
     const duration = durationMinutes || config.defaultSessionDurationMinutes;
-    const radius = radiusMeters ?? DEFAULT_HOST_RADIUS_METERS;
-    const hostAccuracy = accuracy != null ? parseFloat(accuracy) : null;
-    const hostLat =
-      latitude != null && latitude !== '' && !Number.isNaN(parseFloat(latitude))
-        ? parseFloat(latitude)
-        : null;
-    const hostLon =
-      longitude != null && longitude !== '' && !Number.isNaN(parseFloat(longitude))
-        ? parseFloat(longitude)
-        : null;
     const sessionUnits = intInRange(
       req.body.sessionUnits ?? req.body.session_units ?? req.body.periodCount ?? req.body.blockPeriods,
       1,
@@ -109,12 +86,7 @@ async function createSession(req, res) {
       return res.status(400).json({ error: 'Module does not belong to selected class' });
     }
 
-    const safeClassroomId = await ensureClassroomId(
-      classId,
-      classroomId,
-      hostLat,
-      hostLon,
-    );
+    const safeClassroomId = await ensureClassroomId(classId, classroomId);
 
     const sessionId = await generateSessionId(classId, subject.rows[0]?.code || classId);
     const sessionToken = generateSessionToken();
@@ -124,7 +96,7 @@ async function createSession(req, res) {
       `INSERT INTO attendance_sessions
        (id, class_id, subject_id, teacher_id, classroom_id, session_token, duration_minutes, session_units,
         ends_at, host_latitude, host_longitude, radius_meters, host_accuracy)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NULL, NULL, NULL)`,
       [
         sessionId,
         classId,
@@ -135,10 +107,6 @@ async function createSession(req, res) {
         duration,
         sessionUnits,
         endsAt,
-        hostLat,
-        hostLon,
-        radius,
-        hostAccuracy,
       ],
     );
 
@@ -174,12 +142,6 @@ async function createSession(req, res) {
       session_units: sessionUnits,
       startedAt: new Date().toISOString(),
       endsAt: endsAt.toISOString(),
-      hostLatitude: hostLat,
-      hostLongitude: hostLon,
-      host_latitude: hostLat,
-      host_longitude: hostLon,
-      radiusMeters: radius,
-      radius_meters: radius,
       className: classResult.rows[0]?.name || classId,
       class_name: classResult.rows[0]?.name || classId,
       subjectName: subject.rows[0]?.name || subjectId,
@@ -231,8 +193,7 @@ async function getSession(req, res) {
   const { sessionId } = req.params;
   const result = await pool.query(
     `SELECT s.*, c.name as class_name, sub.name as subject_name,
-            cr.name as classroom_name, cr.latitude AS room_lat, cr.longitude AS room_lon,
-            cr.radius_meters AS room_radius_meters, cr.allowed_wifi_ssid, cr.allowed_wifi_bssid,
+            cr.name as classroom_name,
             COALESCE(s.session_units, 1) AS session_units,
             COALESCE(s.session_units, 1) AS "sessionUnits"
      FROM attendance_sessions s
@@ -246,65 +207,6 @@ async function getSession(req, res) {
     return res.status(404).json({ error: 'Session not found' });
   }
   res.json(result.rows[0]);
-}
-
-async function updateSessionLocation(req, res) {
-  const { sessionId } = req.params;
-  const { latitude, longitude, accuracy } = req.body;
-  if (latitude == null || longitude == null) {
-    return res.status(400).json({ error: 'latitude and longitude required' });
-  }
-
-  await expireStaleSessions();
-
-  const session = await pool.query(
-    `SELECT id, class_id, status, ends_at
-     FROM attendance_sessions
-     WHERE id = $1 AND teacher_id = $2
-     LIMIT 1`,
-    [sessionId, req.user.id],
-  );
-
-  if (!session.rows.length) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
-
-  const current = session.rows[0];
-  const isActive =
-    current.status === 'active' &&
-    current.ends_at != null &&
-    new Date(current.ends_at).getTime() > Date.now();
-
-  // The teacher screen sends GPS updates every few seconds. When the session
-  // expires while the page is still open, do not treat the final update as an
-  // API error. Return a clean response so the app can stop its timer silently.
-  if (!isActive) {
-    if (req.io) {
-      req.io.to(`session:${sessionId}`).emit('session:closed', { sessionId });
-      req.io.to(`class:${current.class_id}`).emit('session:closed', { sessionId });
-    }
-    return res.json({
-      ok: false,
-      active: false,
-      reason: 'Session is no longer active',
-    });
-  }
-
-  await pool.query(
-    `UPDATE attendance_sessions
-     SET host_latitude = $1, host_longitude = $2, host_accuracy = $3
-     WHERE id = $4 AND teacher_id = $5`,
-    [latitude, longitude, accuracy != null ? parseFloat(accuracy) : null, sessionId, req.user.id],
-  );
-
-  if (req.io) {
-    req.io.to(`class:${current.class_id}`).emit('session:location-updated', {
-      sessionId,
-      latitude,
-      longitude,
-    });
-  }
-  res.json({ ok: true, active: true });
 }
 
 async function closeSession(req, res) {
@@ -321,37 +223,25 @@ async function closeSession(req, res) {
 }
 
 function mapSessionForClient(row) {
-  const usesHost = row.host_latitude != null && row.host_longitude != null;
-  const centerLat = usesHost ? row.host_latitude : row.room_lat;
-  const centerLon = usesHost ? row.host_longitude : row.room_lon;
-  const radius = usesHost
-    ? row.radius_meters ?? DEFAULT_HOST_RADIUS_METERS
-    : row.room_radius_meters ?? 30;
+  const beaconName = `FacePass-${row.id}`;
   return {
     ...row,
-    latitude: centerLat,
-    longitude: centerLon,
-    radius_meters: radius,
-    uses_host_location: usesHost,
     sessionUnits: row.session_units ?? row.sessionUnits ?? 1,
+    ble_required: true,
+    bleRequired: true,
+    ble_beacon_name: beaconName,
+    bleBeaconName: beaconName,
+    ble_max_distance_meters: 10,
   };
 }
 
 async function getStudentActiveSessions(req, res) {
   await expireStaleSessions();
-  const studentLat = req.query.latitude != null ? parseFloat(req.query.latitude) : null;
-  const studentLon = req.query.longitude != null ? parseFloat(req.query.longitude) : null;
-  const studentAccuracy =
-    req.query.accuracy != null ? parseFloat(req.query.accuracy) : null;
 
   const result = await pool.query(
     `SELECT s.id, s.class_id, s.subject_id, s.session_token, s.started_at, s.ends_at, s.status,
-            s.host_latitude, s.host_longitude, s.radius_meters, s.host_accuracy,
             COALESCE(s.session_units, 1) AS session_units,
             c.name AS class_name, sub.name AS subject_name, u.full_name AS teacher_name,
-            cr.latitude AS room_lat, cr.longitude AS room_lon,
-            cr.radius_meters AS room_radius_meters,
-            cr.allowed_wifi_ssid AS wifi_ssid, cr.allowed_wifi_bssid AS wifi_bssid,
             (SELECT COUNT(*) FROM attendance_records ar
              WHERE ar.session_id = s.id AND ar.student_id = $1 AND ar.status <> 'REJECTED') AS already_marked
      FROM attendance_sessions s
@@ -359,26 +249,15 @@ async function getStudentActiveSessions(req, res) {
      JOIN subjects sub ON sub.id = s.subject_id
      JOIN users u ON u.id = s.teacher_id
      JOIN class_enrollments ce ON ce.class_id = s.class_id AND ce.student_id = $1
-     LEFT JOIN classrooms cr ON cr.id = s.classroom_id
      WHERE s.status = 'active' AND s.ends_at > NOW()
      ORDER BY s.started_at DESC`,
     [req.user.id],
   );
 
-  const sessions = result.rows.map((row) => {
-    const mapped = mapSessionForClient(row);
-    const beaconName = `FacePass-${row.id}`;
-    return {
-      ...mapped,
-      ble_required: true,
-      bleRequired: true,
-      ble_beacon_name: beaconName,
-      bleBeaconName: beaconName,
-      ble_max_distance_meters: 10,
-      within_radius: true,
-      already_marked: parseInt(row.already_marked, 10) > 0,
-    };
-  });
+  const sessions = result.rows.map((row) => ({
+    ...mapSessionForClient(row),
+    already_marked: parseInt(row.already_marked, 10) > 0,
+  }));
 
   const enrollments = await pool.query(
     `SELECT class_id FROM class_enrollments WHERE student_id = $1`,
@@ -458,7 +337,6 @@ module.exports = {
   getActiveSessions,
   getStudentActiveSessions,
   getSession,
-  updateSessionLocation,
   closeSession,
   getSessionAttendance,
   getSessionRoster,

@@ -11,7 +11,8 @@ import '../../../../core/providers/auth_provider.dart';
 import '../../../../core/providers/theme_provider.dart';
 import '../../../../services/api_client.dart';
 import '../../../../services/attendance_service.dart';
-import '../../../../services/bluetooth_validation_service.dart';
+import '../../../../core/ble/ble_proximity_state.dart';
+import '../../../../services/ble_proximity_monitor.dart';
 import '../../../../services/catalog_service.dart';
 import '../../../../services/face_registration_service.dart';
 import '../../../../widgets/app_brand_logo.dart';
@@ -36,23 +37,49 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
   io.Socket? _socket;
   Timer? _sessionRefreshTimer;
   int _apiSessionCount = 0;
-  final _ble = BluetoothValidationService();
+  List<Map<String, dynamic>> _apiSessions = [];
+  Map<String, BleSessionProximity> _proximity = {};
+  StreamSubscription<Map<String, BleSessionProximity>>? _proximitySub;
+  final _proximityMonitor = BleProximityMonitor.instance;
 
   @override
   void initState() {
     super.initState();
     _load();
     _connectSocket();
+    _proximitySub = _proximityMonitor.stream.listen(_onProximityUpdate);
     _sessionRefreshTimer =
-        Timer.periodic(const Duration(seconds: 10), (_) => _loadActiveSessions());
+        Timer.periodic(const Duration(seconds: 25), (_) => _fetchSessionsFromApi());
   }
 
   @override
   void dispose() {
     _sessionRefreshTimer?.cancel();
+    _proximitySub?.cancel();
+    _proximityMonitor.stop();
     _socket?.disconnect();
     _socket?.dispose();
     super.dispose();
+  }
+
+  void _onProximityUpdate(Map<String, BleSessionProximity> states) {
+    if (!mounted) return;
+    setState(() {
+      _proximity = states;
+      _activeSessions = _sessionsInBluetoothRange();
+    });
+  }
+
+  List<Map<String, dynamic>> _sessionsInBluetoothRange() {
+    return _apiSessions.where((s) {
+      final id = (s['id'] ?? s['session_id'] ?? '').toString();
+      return _proximity[id]?.visibleOnDashboard == true;
+    }).toList();
+  }
+
+  BleSessionProximity? _proximityFor(Map<String, dynamic> session) {
+    final id = (session['id'] ?? session['session_id'] ?? '').toString();
+    return _proximity[id];
   }
 
   /// Reload stats, modules, and live sessions (e.g. after marking attendance).
@@ -85,14 +112,14 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
         _joinedModules = joinedModules;
       });
     }
-    await _loadActiveSessions();
+    await _fetchSessionsFromApi();
   }
 
   void _connectSocket() {
     _socket = io.io(ApiConfig.socketOrigin, io.OptionBuilder().setTransports(['websocket']).build());
     _socket!.connect();
-    _socket!.on('session:started', (_) => _loadActiveSessions());
-    _socket!.on('session:closed', (_) => _loadActiveSessions());
+    _socket!.on('session:started', (_) => _fetchSessionsFromApi());
+    _socket!.on('session:closed', (_) => _fetchSessionsFromApi());
     _socket!.on('attendance:updated', (_) => _refreshDashboard());
     _socket!.on('attendance:marked', (_) => _refreshDashboard());
   }
@@ -103,28 +130,26 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     }
   }
 
-  Future<void> _loadActiveSessions() async {
+  Future<void> _fetchSessionsFromApi() async {
     if (!mounted) return;
     setState(() => _loadingSessions = true);
     try {
       final result = await AttendanceService().getStudentActiveSessions();
       final all = result.sessions;
-      var nearby = <Map<String, dynamic>>[];
-      if (all.isNotEmpty) {
-        final ids = all
-            .map((s) => (s['id'] ?? s['session_id'] ?? '').toString())
-            .where((id) => id.isNotEmpty)
-            .toList();
-        final inRange = await _ble.scanNearbySessionIds(sessionIds: ids);
-        nearby = all
-            .where((s) => inRange.contains((s['id'] ?? s['session_id'] ?? '').toString()))
-            .toList();
-      }
+      final ids = all
+          .map((s) => (s['id'] ?? s['session_id'] ?? '').toString())
+          .where((id) => id.isNotEmpty)
+          .toList();
+
+      await _proximityMonitor.setSessionIds(ids);
+
       if (mounted) {
         setState(() {
           _apiSessionCount = all.length;
-          _activeSessions = nearby;
+          _apiSessions = all;
+          _activeSessions = _sessionsInBluetoothRange();
           _enrolledClassIds = result.enrolledClassIds;
+          _loadingSessions = false;
         });
         _joinClassRooms();
       }
@@ -156,7 +181,7 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
         );
       }
     } finally {
-      if (mounted) setState(() => _loadingSessions = false);
+      if (mounted && _loadingSessions) setState(() => _loadingSessions = false);
     }
   }
 
@@ -178,7 +203,8 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
       return;
     }
 
-    await context.push<bool>(
+    await _proximityMonitor.stop();
+    final ok = await context.push<bool>(
       '/live-auth',
       extra: {
         'sessionId': session['id'],
@@ -187,7 +213,8 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
       },
     );
     if (!mounted) return;
-    await _refreshDashboard();
+    if (ok == true) await _refreshDashboard();
+    else await _fetchSessionsFromApi();
   }
 
   Future<void> _showJoinModuleSheet() async {
@@ -309,27 +336,54 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
             if (_activeSessions.isNotEmpty)
               ..._activeSessions.map((session) => Padding(
                     padding: const EdgeInsets.only(bottom: 14),
-                    child: _LiveSessionBanner(session: session, loading: _loadingSessions, onMark: () => _markAttendance(session)),
+                    child: _LiveSessionBanner(
+                      session: session,
+                      proximity: _proximityFor(session),
+                      loading: _loadingSessions,
+                      onMark: () => _markAttendance(session),
+                    ),
                   )),
-            if (_activeSessions.isEmpty)
+            if (_apiSessionCount > 0 && _activeSessions.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: GlassCard(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.bluetooth_searching, color: Color(0xFF3B82F6)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _loadingSessions
+                              ? 'Scanning for teacher Bluetooth (within ${AppConstants.bleMaxDistanceMeters.toInt()} m)...'
+                              : _proximity.values.any((p) => p.band == BleProximityBand.weak)
+                                  ? 'Teacher nearby — move a little closer for the session to unlock.'
+                                  : 'Session is live. Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m of your teacher with Bluetooth on.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                      if (_loadingSessions)
+                        const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            if (_activeSessions.isEmpty && _apiSessionCount == 0)
               GlassCard(
                 padding: const EdgeInsets.all(16),
                 child: Row(
                   children: [
-                    Icon(
-                      _apiSessionCount > 0
-                          ? Icons.bluetooth_searching
-                          : Icons.sensors_off_outlined,
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
+                    Icon(Icons.sensors_off_outlined, color: Theme.of(context).colorScheme.outline),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
                         _loadingSessions
-                            ? 'Scanning for teacher Bluetooth (within ${AppConstants.bleMaxDistanceMeters.toInt()} m)...'
-                            : _apiSessionCount > 0
-                                ? 'A session is active but you are not in range. Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m of your teacher with Bluetooth on.'
-                                : 'No live session currently active.',
+                            ? 'Checking for live sessions...'
+                            : 'No live session currently active.',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                     ),
@@ -616,10 +670,16 @@ class _StudentHero extends StatelessWidget {
 
 class _LiveSessionBanner extends StatelessWidget {
   final Map<String, dynamic> session;
+  final BleSessionProximity? proximity;
   final bool loading;
   final VoidCallback onMark;
 
-  const _LiveSessionBanner({required this.session, required this.loading, required this.onMark});
+  const _LiveSessionBanner({
+    required this.session,
+    this.proximity,
+    required this.loading,
+    required this.onMark,
+  });
 
   DateTime _endsAt() {
     final raw = session['ends_at'] ?? session['endsAt'];
@@ -632,6 +692,12 @@ class _LiveSessionBanner extends StatelessWidget {
     final marked = session['already_marked'] == true;
     final subject = (session['subject_name'] ?? session['subjectName'] ?? 'Active Class').toString();
     final teacher = (session['teacher_name'] ?? session['teacherName'] ?? session['teacher'] ?? 'Teacher').toString();
+    final ready = proximity?.readyToMark ?? false;
+    final proximityLabel = proximity?.bandLabel ??
+        'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m';
+    final distText = proximity?.estimatedMeters != null
+        ? ' · ≈${proximity!.estimatedMeters!.toStringAsFixed(0)} m'
+        : '';
 
     return GlassCard(
       padding: const EdgeInsets.all(18),
@@ -661,12 +727,22 @@ class _LiveSessionBanner extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               StatusPill(
-                label: marked ? 'Already Marked' : 'Bluetooth ≤10 m at check-in',
-                icon: marked ? Icons.check_circle : Icons.bluetooth_searching,
-                color: marked ? const Color(0xFF10B981) : const Color(0xFF3B82F6),
+                label: marked
+                    ? 'Already Marked'
+                    : '$proximityLabel$distText',
+                icon: marked
+                    ? Icons.check_circle
+                    : ready
+                        ? Icons.bluetooth_connected
+                        : Icons.bluetooth_searching,
+                color: marked
+                    ? const Color(0xFF10B981)
+                    : ready
+                        ? const Color(0xFF10B981)
+                        : const Color(0xFF3B82F6),
               ),
               ElevatedButton.icon(
-                onPressed: marked || loading ? null : onMark,
+                onPressed: marked || loading || !ready ? null : onMark,
                 icon: ClipOval(
                   child: Image.asset(
                     AppConstants.brandIconAsset,

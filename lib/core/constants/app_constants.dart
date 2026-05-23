@@ -13,17 +13,23 @@ class AppConstants {
   /// Attendance proximity: Bluetooth only (max 10 m from teacher phone).
   static const double bleMaxDistanceMeters = 10;
 
-  /// RSSI at ~1 m (reference for distance estimate only).
-  static const int bleRssiAtOneMeter = -58;
+  /// Calibrated Tx power at 1 m (used in log-distance estimate).
+  static const int bleRssiAtOneMeter = -59;
+  static const double blePathLossExponent = 2.35;
 
-  /// Accept attendance when beacon matches and RSSI is at or above this (~10–12 m).
-  static const int bleMinimumRssi = -88;
+  /// Dashboard: enter "in range" (show session banner).
+  static const int bleRssiShowSessionEnter = -90;
+  static const int bleRssiShowSessionLeave = -94;
 
-  /// Strong signal (typically under ~5 m).
-  static const int bleStrongRssi = -75;
+  /// Mark attendance: stricter band (~within 10 m, stronger signal).
+  static const int bleRssiMarkEnter = -84;
+  static const int bleRssiMarkLeave = -88;
 
-  static const int bleScanSeconds = 14;
-  static const int bleNearbyScanSeconds = 8;
+  /// Server minimum RSSI (align with [bleRssiMarkEnter]).
+  static const int bleMinimumRssi = bleRssiMarkEnter;
+
+  static const int bleRssiMedianWindow = 9;
+  static const int bleScanSeconds = 12;
 
   /// MobileFaceNet output (runtime-detected; 128 or 192 depending on model file).
   static const int embeddingSize = 192;

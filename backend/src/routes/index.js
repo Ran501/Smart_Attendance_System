@@ -76,9 +76,6 @@ router.post(
     body('classId').notEmpty(),
     body('subjectId').notEmpty(),
     body('classroomId').notEmpty(),
-    body('latitude').optional({ values: 'null' }).isFloat({ min: -90, max: 90 }),
-    body('longitude').optional({ values: 'null' }).isFloat({ min: -180, max: 180 }),
-    body('radiusMeters').optional().isInt({ min: 1, max: 500 }),
     body('sessionUnits').optional().isInt({ min: 1, max: 3 }),
   ],
   validate,
@@ -102,18 +99,6 @@ router.get('/student/modules/:moduleId/sessions', authenticate, authorize('stude
 router.get('/classes/:classId/sessions', authenticate, moduleController.getModuleSessions);
 router.get('/sessions', authenticate, moduleController.getModuleSessions);
 router.get('/sessions/:sessionId', authenticate, sessionController.getSession);
-router.patch(
-  '/sessions/:sessionId/location',
-  authenticate,
-  authorize('teacher', 'admin'),
-  [
-    body('latitude').isFloat({ min: -90, max: 90 }),
-    body('longitude').isFloat({ min: -180, max: 180 }),
-    body('accuracy').optional().isFloat({ min: 0 }),
-  ],
-  validate,
-  sessionController.updateSessionLocation,
-);
 router.post(
   '/sessions/:sessionId/close',
   authenticate,

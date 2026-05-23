@@ -1,8 +1,6 @@
 const pool = require('./pool');
 
 async function ensureRuntimeSchema() {
-  // Keep these changes idempotent so Railway/local deployments do not crash
-  // when an older database is used with the updated Flutter app.
   const statements = [
     `DO $$
      BEGIN
@@ -49,7 +47,9 @@ async function ensureRuntimeSchema() {
     `ALTER TABLE attendance_records
        ADD COLUMN IF NOT EXISTS manual_note TEXT,
        ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id),
-       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;`,
+       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ,
+       ADD COLUMN IF NOT EXISTS ble_verified BOOLEAN,
+       ADD COLUMN IF NOT EXISTS ble_rssi INTEGER;`,
     `ALTER TABLE attendance_sessions DROP COLUMN IF EXISTS qr_payload;`,
     `CREATE INDEX IF NOT EXISTS idx_sessions_subject ON attendance_sessions(subject_id);`,
     `CREATE INDEX IF NOT EXISTS idx_subjects_teacher ON subjects(teacher_id);`,

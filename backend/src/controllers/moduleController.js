@@ -201,9 +201,9 @@ async function createModule(req, res) {
     );
     if (!existingRoom.rows.length) {
       await client.query(
-        `INSERT INTO classrooms (name, class_id, latitude, longitude, radius_meters, allowed_wifi_ssid)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        ['Default Classroom', classId, 27.7172, 85.3240, 100, 'Campus-WiFi'],
+        `INSERT INTO classrooms (name, class_id, latitude, longitude, radius_meters)
+         VALUES ($1, $2, 0, 0, 100)`,
+        ['Default Classroom', classId],
       );
     }
 

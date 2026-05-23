@@ -1,6 +1,7 @@
 const pool = require('../database/pool');
 const config = require('../config');
 const { validateBleProximity } = require('../utils/ble');
+const { upsertAttendanceRecord } = require('../utils/dbCompat');
 const { evaluateFaceMatch } = require('../utils/face');
 const { logAudit, logFraud } = require('../services/auditService');
 const { expireStaleSessions } = require('./sessionController');
@@ -28,8 +29,6 @@ async function submitAttendance(req, res) {
     sessionId,
     sessionToken,
     liveEmbedding,
-    latitude,
-    longitude,
     bleVerified,
     bleRssi,
     bleDeviceId,
@@ -38,7 +37,6 @@ async function submitAttendance(req, res) {
     deviceFingerprint,
     livenessPassed,
     livenessScore,
-    locationAccuracy,
   } = req.body;
 
   if (!Array.isArray(liveEmbedding) || liveEmbedding.length < 64) {
@@ -53,12 +51,8 @@ async function submitAttendance(req, res) {
   }
 
   const sessionResult = await pool.query(
-    `SELECT s.*, cr.latitude as room_lat, cr.longitude as room_lon,
-            cr.radius_meters as room_radius_meters,
-            cr.allowed_wifi_ssid, cr.allowed_wifi_bssid, cr.allowed_subnet,
-            COALESCE(s.session_units, 1) AS session_units
+    `SELECT s.*, COALESCE(s.session_units, 1) AS session_units
      FROM attendance_sessions s
-     LEFT JOIN classrooms cr ON cr.id = s.classroom_id
      WHERE s.id = $1 AND s.session_token = $2 AND s.status = 'active' AND s.ends_at > NOW()`,
     [sessionId, sessionToken],
   );
@@ -100,11 +94,11 @@ async function submitAttendance(req, res) {
   }
   if (!deviceValid) {
     await logFraud(req.user.id, sessionId, 'DEVICE_FAILED', { deviceId });
-    await recordRejected(session, req.user.id, latitude, longitude, 0, {
-      geoValid: false,
-      wifiValid: false,
+    await recordRejected(session, req.user.id, 0, {
       deviceValid: false,
       livenessPassed: false,
+      bleVerified: false,
+      bleRssi: null,
       reason: 'Device verification failed',
     });
     return res.status(403).json({ accepted: false, reason: 'Device verification failed' });
@@ -117,11 +111,11 @@ async function submitAttendance(req, res) {
       bleDeviceId,
       bleDeviceName,
     });
-    await recordRejected(session, req.user.id, latitude, longitude, 0, {
-      geoValid: false,
-      wifiValid: false,
+    await recordRejected(session, req.user.id, 0, {
       deviceValid: true,
       livenessPassed: livenessPassed || false,
+      bleVerified: false,
+      bleRssi: bleRssi != null ? Number(bleRssi) : null,
       reason: bleCheck.reason,
     });
     return res.status(403).json({ accepted: false, reason: bleCheck.reason });
@@ -129,11 +123,11 @@ async function submitAttendance(req, res) {
 
   if (!livenessPassed) {
     await logFraud(req.user.id, sessionId, 'LIVENESS_FAILED', { livenessScore });
-    await recordRejected(session, req.user.id, latitude, longitude, 0, {
-      geoValid: false,
-      wifiValid: false,
+    await recordRejected(session, req.user.id, 0, {
       deviceValid: true,
       livenessPassed: false,
+      bleVerified: true,
+      bleRssi: bleRssi != null ? Number(bleRssi) : null,
       reason: 'Liveness detection failed',
     });
     return res.status(403).json({ accepted: false, reason: 'Liveness verification failed' });
@@ -144,13 +138,6 @@ async function submitAttendance(req, res) {
     [req.user.id],
   );
   if (!stored.rows.length) {
-    return res.status(400).json({
-      accepted: false,
-      reason: 'Face not registered. Complete smile, up, down, right, and left enrolment first.',
-    });
-  }
-
-  if (stored.rows.length < 1) {
     return res.status(400).json({
       accepted: false,
       reason: 'Face not registered. Complete smile, up, down, right, and left enrolment first.',
@@ -173,11 +160,11 @@ async function submitAttendance(req, res) {
       matchMode: faceMatch.matchMode,
       minSimilarity: faceMatch.minSimilarity,
     });
-    await recordRejected(session, req.user.id, latitude, longitude, matchScore, {
-      geoValid: false,
-      wifiValid: false,
+    await recordRejected(session, req.user.id, matchScore, {
       deviceValid: true,
       livenessPassed: true,
+      bleVerified: true,
+      bleRssi: bleRssi != null ? Number(bleRssi) : null,
       reason: `Face match below threshold (${(matchScore * 100).toFixed(1)}%)`,
     });
     return res.status(403).json({
@@ -192,37 +179,24 @@ async function submitAttendance(req, res) {
   }
 
   const status = 'PRESENT';
-  await pool.query(
-    `INSERT INTO attendance_records
-     (session_id, class_id, student_id, status, match_confidence, latitude, longitude,
-      geo_valid, wifi_valid, device_valid, liveness_passed)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, false, false, true, true)
-     ON CONFLICT (session_id, student_id) DO UPDATE SET
-       status = EXCLUDED.status,
-       match_confidence = EXCLUDED.match_confidence,
-       latitude = EXCLUDED.latitude,
-       longitude = EXCLUDED.longitude,
-       geo_valid = EXCLUDED.geo_valid,
-       wifi_valid = EXCLUDED.wifi_valid,
-       device_valid = EXCLUDED.device_valid,
-       liveness_passed = EXCLUDED.liveness_passed,
-       rejection_reason = NULL,
-       manual_note = NULL,
-       updated_at = NOW()`,
-    [
-      sessionId,
-      session.class_id,
-      req.user.id,
-      status,
-      matchScore,
-      latitude,
-      longitude,
-    ],
-  );
+  const rssiValue = bleRssi != null ? Number(bleRssi) : null;
+  await upsertAttendanceRecord(pool, {
+    sessionId,
+    classId: session.class_id,
+    studentId: req.user.id,
+    status,
+    confidence: matchScore,
+    deviceValid: true,
+    livenessPassed: true,
+    rejectionReason: null,
+    bleVerified: true,
+    bleRssi: rssiValue,
+  });
 
   await logAudit(req.user.id, 'ATTENDANCE_MARKED', 'attendance_record', sessionId, {
     confidence: matchScore,
     matchMode: faceMatch.matchMode,
+    bleRssi: rssiValue,
   });
 
   if (req.io) {
@@ -248,37 +222,19 @@ async function submitAttendance(req, res) {
   });
 }
 
-async function recordRejected(session, studentId, lat, lon, confidence, meta) {
-  await pool.query(
-    `INSERT INTO attendance_records
-     (session_id, class_id, student_id, status, match_confidence, latitude, longitude,
-      geo_valid, wifi_valid, device_valid, liveness_passed, rejection_reason)
-     VALUES ($1, $2, $3, 'REJECTED', $4, $5, $6, $7, $8, $9, $10, $11)
-     ON CONFLICT (session_id, student_id) DO UPDATE SET
-       status = 'REJECTED',
-       match_confidence = EXCLUDED.match_confidence,
-       latitude = EXCLUDED.latitude,
-       longitude = EXCLUDED.longitude,
-       geo_valid = EXCLUDED.geo_valid,
-       wifi_valid = EXCLUDED.wifi_valid,
-       device_valid = EXCLUDED.device_valid,
-       liveness_passed = EXCLUDED.liveness_passed,
-       rejection_reason = EXCLUDED.rejection_reason,
-       updated_at = NOW()`,
-    [
-      session.id,
-      session.class_id,
-      studentId,
-      confidence,
-      lat,
-      lon,
-      meta.geoValid,
-      meta.wifiValid,
-      meta.deviceValid,
-      meta.livenessPassed,
-      meta.reason,
-    ],
-  );
+async function recordRejected(session, studentId, confidence, meta) {
+  await upsertAttendanceRecord(pool, {
+    sessionId: session.id,
+    classId: session.class_id,
+    studentId,
+    status: 'REJECTED',
+    confidence,
+    deviceValid: meta.deviceValid,
+    livenessPassed: meta.livenessPassed,
+    rejectionReason: meta.reason,
+    bleVerified: meta.bleVerified === true,
+    bleRssi: meta.bleRssi,
+  });
 }
 
 async function getStudentHistory(req, res) {
@@ -351,91 +307,50 @@ async function getStudentStats(req, res) {
 }
 
 async function updateAttendanceStatus(req, res) {
-  const recordId = req.params.recordId || req.body.recordId || req.body.attendanceId;
-  const sessionId = req.params.sessionId || req.body.sessionId || req.body.session_id;
-  const studentId = req.params.studentId || req.body.studentId || req.body.student_id;
-  const status = normalizeStatus(req.body.status || req.body.attendanceStatus || req.body.attendance_status);
-  const note = req.body.note || req.body.remarks || req.body.reason || null;
-
+  const { sessionId } = req.params;
+  const status = normalizeStatus(req.body.status);
   if (!EDITABLE_STATUSES.has(status)) {
     return res.status(400).json({ error: 'Invalid attendance status' });
   }
 
-  let target;
-  if (recordId) {
-    const existing = await pool.query(
-      `SELECT ar.*, s.teacher_id
-       FROM attendance_records ar
-       JOIN attendance_sessions s ON s.id = ar.session_id
-       WHERE ar.id = $1`,
-      [recordId],
-    );
-    if (!existing.rows.length) return res.status(404).json({ error: 'Attendance record not found' });
-    target = existing.rows[0];
-  } else {
-    if (!sessionId || !studentId) {
-      return res.status(400).json({ error: 'sessionId and studentId are required' });
-    }
-    const session = await pool.query(
-      `SELECT id AS session_id, class_id, teacher_id FROM attendance_sessions WHERE id = $1`,
-      [sessionId],
-    );
-    if (!session.rows.length) return res.status(404).json({ error: 'Session not found' });
-
-    // Flutter may send either the internal user UUID, student ID/CID, or email.
-    const student = await pool.query(
-      `SELECT id FROM users
-       WHERE id::text = $1 OR student_id = $1 OR email = $1
-       LIMIT 1`,
-      [String(studentId)],
-    );
-    if (!student.rows.length) return res.status(404).json({ error: 'Student not found' });
-
-    target = { ...session.rows[0], student_id: student.rows[0].id };
-  }
-
-  if (req.user.role === 'teacher' && target.teacher_id !== req.user.id) {
-    return res.status(403).json({ error: 'You can only edit your own session records' });
-  }
-
-  const updated = await pool.query(
-    `INSERT INTO attendance_records
-     (session_id, class_id, student_id, status, marked_at, manual_note, updated_by, updated_at)
-     VALUES ($1, $2, $3, $4, NOW(), $5, $6, NOW())
-     ON CONFLICT (session_id, student_id) DO UPDATE SET
-       status = EXCLUDED.status,
-       manual_note = EXCLUDED.manual_note,
-       updated_by = EXCLUDED.updated_by,
-       updated_at = NOW(),
-       rejection_reason = CASE WHEN EXCLUDED.status = 'REJECTED' THEN attendance_records.rejection_reason ELSE NULL END
-     RETURNING *`,
-    [
-      target.session_id,
-      target.class_id,
-      target.student_id,
-      status,
-      note,
-      req.user.id,
-    ],
+  const session = await pool.query(
+    'SELECT id, class_id, teacher_id FROM attendance_sessions WHERE id = $1',
+    [sessionId],
   );
+  if (!session.rows.length) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+  if (req.user.role === 'teacher' && session.rows[0].teacher_id !== req.user.id) {
+    return res.status(403).json({ error: 'Not your session' });
+  }
 
-  await logAudit(req.user.id, 'ATTENDANCE_STATUS_UPDATED', 'attendance_record', updated.rows[0].id, {
-    sessionId: target.session_id,
-    studentId: target.student_id,
-    status,
-    note,
-  });
+  const { recordId, studentId } = req.body;
+  if (recordId) {
+    await pool.query(
+      `UPDATE attendance_records SET status = $1, updated_by = $2, updated_at = NOW()
+       WHERE id = $3 AND session_id = $4`,
+      [status, req.user.id, recordId, sessionId],
+    );
+  } else if (studentId) {
+    await pool.query(
+      `INSERT INTO attendance_records (session_id, class_id, student_id, status, updated_by, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (session_id, student_id) DO UPDATE SET
+         status = EXCLUDED.status,
+         updated_by = EXCLUDED.updated_by,
+         updated_at = NOW()`,
+      [sessionId, session.rows[0].class_id, studentId, status, req.user.id],
+    );
+  } else {
+    return res.status(400).json({ error: 'recordId or studentId required' });
+  }
 
   if (req.io) {
-    req.io.to(`session:${target.session_id}`).emit('attendance:updated', {
-      sessionId: target.session_id,
-      studentId: target.student_id,
-      status,
-      record: updated.rows[0],
-    });
+    req.io.to(`session:${sessionId}`).emit('attendance:record-updated', { sessionId, status });
+    req.io.to(`class:${session.rows[0].class_id}`).emit('attendance:updated', { sessionId, status });
   }
 
-  res.json({ message: 'Attendance status updated', record: updated.rows[0] });
+  res.json({ ok: true, status });
 }
 
 module.exports = {
