@@ -341,10 +341,15 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         ...bleResult.toJson(),
       });
 
+      final accepted = result['accepted'] == true;
+      final matchPct = (result['confidence'] as num?)?.toDouble();
+      final threshold = (result['threshold'] as num?)?.toDouble() ??
+          AppConstants.faceMatchThreshold;
       _showResult(
-        result['accepted'] == true,
+        accepted,
         result['message'] as String? ?? result['reason'] as String? ?? 'Done',
-        confidence: (result['confidence'] as num?)?.toDouble(),
+        confidence: matchPct,
+        threshold: threshold,
       );
     } catch (e) {
       _showResult(false, _friendlyError(e));
@@ -359,7 +364,14 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
     return text;
   }
 
-  void _showResult(bool success, String message, {double? confidence}) {
+  void _showResult(
+    bool success,
+    String message, {
+    double? confidence,
+    double? threshold,
+  }) {
+    final thresholdPct =
+        ((threshold ?? AppConstants.faceMatchThreshold) * 100).toStringAsFixed(0);
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -372,7 +384,8 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
         title: Text(success ? 'Attendance Marked' : 'Attendance Rejected'),
         content: Text(
           confidence != null
-              ? '$message\nFace confidence: ${(confidence * 100).toStringAsFixed(1)}%'
+              ? '$message\nFace match: ${(confidence * 100).toStringAsFixed(1)}% '
+                  '(required ≥ $thresholdPct%)'
               : message,
         ),
         actions: [

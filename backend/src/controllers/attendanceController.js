@@ -216,30 +216,34 @@ async function submitAttendance(req, res) {
 
   const storedEmbeddings = stored.rows.map((row) => ({
     id: row.id,
+    angleType: row.angle_type,
     embedding:
       typeof row.embedding === 'string' ? JSON.parse(row.embedding) : row.embedding,
   }));
 
   const threshold = config.faceMatchThreshold;
   const faceMatch = evaluateFaceMatch(liveEmbedding, storedEmbeddings, threshold);
+  const matchScore = faceMatch.similarity;
   if (!faceMatch.matched) {
     await logFraud(req.user.id, sessionId, 'FACE_MISMATCH', {
-      confidence: faceMatch.avgSimilarity,
+      confidence: matchScore,
+      matchMode: faceMatch.matchMode,
       minSimilarity: faceMatch.minSimilarity,
     });
-    await recordRejected(session, req.user.id, latitude, longitude, faceMatch.avgSimilarity, {
+    await recordRejected(session, req.user.id, latitude, longitude, matchScore, {
       geoValid: true,
       wifiValid: true,
       deviceValid: true,
       livenessPassed: true,
-      reason: `Face match below threshold (best ${(faceMatch.maxSimilarity * 100).toFixed(1)}%)`,
+      reason: `Face match below threshold (${(matchScore * 100).toFixed(1)}%)`,
     });
     return res.status(403).json({
       accepted: false,
       reason:
-        `Face not recognized (best ${(faceMatch.maxSimilarity * 100).toFixed(1)}%, ` +
+        `Face not recognized (${(matchScore * 100).toFixed(1)}%, ` +
         `need ${(threshold * 100).toFixed(0)}% or higher)`,
-      confidence: faceMatch.avgSimilarity,
+      confidence: matchScore,
+      matchMode: faceMatch.matchMode,
       minSimilarity: faceMatch.minSimilarity,
     });
   }
@@ -267,14 +271,15 @@ async function submitAttendance(req, res) {
       session.class_id,
       req.user.id,
       status,
-      faceMatch.avgSimilarity,
+      matchScore,
       latitude,
       longitude,
     ],
   );
 
   await logAudit(req.user.id, 'ATTENDANCE_MARKED', 'attendance_record', sessionId, {
-    confidence: faceMatch.avgSimilarity,
+    confidence: matchScore,
+    matchMode: faceMatch.matchMode,
   });
 
   if (req.io) {
@@ -282,14 +287,16 @@ async function submitAttendance(req, res) {
       sessionId,
       studentId: req.user.id,
       status,
-      confidence: faceMatch.avgSimilarity,
+      confidence: matchScore,
     });
   }
 
   res.json({
     accepted: true,
     status,
-    confidence: faceMatch.avgSimilarity,
+    confidence: matchScore,
+    matchMode: faceMatch.matchMode,
+    threshold,
     message: 'Attendance recorded successfully',
   });
 }
