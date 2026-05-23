@@ -703,8 +703,8 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
                     decoration: const InputDecoration(labelText: 'Count this attendance as', prefixIcon: Icon(Icons.view_timeline_outlined)),
                     items: const [
                       DropdownMenuItem(value: 1, child: Text('1 Session')),
-                      DropdownMenuItem(value: 2, child: Text('2 Sessions / Double period')),
-                      DropdownMenuItem(value: 3, child: Text('3 Sessions / Block period')),
+                      DropdownMenuItem(value: 2, child: Text('2 Sessions')),
+                      DropdownMenuItem(value: 3, child: Text('3 Sessions')),
                     ],
                     onChanged: _starting ? null : (v) => setState(() => _sessionUnits = v ?? 1),
                   ),
