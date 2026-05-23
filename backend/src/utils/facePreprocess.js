@@ -15,7 +15,7 @@ const FACE_PREPROCESS_SPEC = Object.freeze({
   alignment: 'mlkit-eye-landmarks-v1',
   embeddingPostprocess: 'l2-normalize',
   enrollmentStrategy: 'average-5-poses-l2',
-  defaultThreshold: 0.75,
+  defaultThreshold: 0.70,
 });
 
 const MIN_EMBEDDING_DIM = 64;

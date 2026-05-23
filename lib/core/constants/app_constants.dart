@@ -3,7 +3,7 @@ class AppConstants {
   static const String appTagline = 'AI Smart Campus Attendance';
 
   /// Server uses the same value via FACE_MATCH_THRESHOLD (cosine similarity).
-  static const double faceMatchThreshold = 0.75;
+  static const double faceMatchThreshold = 0.70;
 
   /// Server also requires top-2 enrolled poses to average ≥ threshold × this.
   static const double faceMatchTop2Ratio = 0.96;
