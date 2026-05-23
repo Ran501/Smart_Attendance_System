@@ -120,7 +120,7 @@ class BluetoothValidationService {
         return BleValidationResult(
           verified: false,
           message: sawBeacon
-              ? 'Bluetooth signal too weak. Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m of your teacher.'
+              ? 'You are outside range. Move closer to your teacher (within ${AppConstants.bleMaxDistanceMeters.toInt()} m) with Bluetooth on.'
               : 'Teacher beacon "$expectedBeacon" not found. Teacher must keep the session screen open with Beacon ON.',
         );
       }
@@ -153,7 +153,7 @@ class BluetoothValidationService {
             ? 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m (≈${proximity.estimatedMeters?.toStringAsFixed(0) ?? "?"} m, $rssi dBm)'
             : proximity.showOnDashboard
                 ? 'Almost there — move a little closer ($rssi dBm, ≈${proximity.estimatedMeters?.toStringAsFixed(0) ?? "?"} m)'
-                : 'Too far from teacher ($rssi dBm). Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m.',
+                : 'You are outside range ($rssi dBm). Move closer to your teacher (within ${AppConstants.bleMaxDistanceMeters.toInt()} m).',
       );
     } catch (e) {
       return BleValidationResult(

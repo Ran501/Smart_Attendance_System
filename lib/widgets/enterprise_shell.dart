@@ -231,31 +231,25 @@ class MetricTile extends StatelessWidget {
     final c = color ?? scheme.primary;
     return GlassCard(
       padding: const EdgeInsets.all(14),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: constraints.maxWidth,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(16)),
-                    child: Icon(icon, color: c, size: 22),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(value, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 3),
-                  Text(label, style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
-                ],
-              ),
-            ),
-          );
-        },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(16)),
+            child: Icon(icon, color: c, size: 22),
+          ),
+          const Spacer(),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900, height: 1.05),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 3),
+          Text(label, style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
+        ],
       ),
     );
   }
@@ -266,6 +260,12 @@ class ResponsiveGrid extends StatelessWidget {
   final double minItemWidth;
   final double gap;
   final double childAspectRatio;
+  /// When set, always uses this column count (e.g. 2 for phone metric tiles).
+  final int? crossAxisCount;
+  /// Fixed tile height; preferred over [childAspectRatio] when set.
+  final double? mainAxisExtent;
+  final int minCrossAxisCount;
+  final int maxCrossAxisCount;
 
   const ResponsiveGrid({
     super.key,
@@ -273,6 +273,10 @@ class ResponsiveGrid extends StatelessWidget {
     this.minItemWidth = 220,
     this.gap = 14,
     this.childAspectRatio = 1.25,
+    this.crossAxisCount,
+    this.mainAxisExtent,
+    this.minCrossAxisCount = 1,
+    this.maxCrossAxisCount = 99,
   });
 
   @override
@@ -280,14 +284,25 @@ class ResponsiveGrid extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
-        final count = math.max(1, (width / minItemWidth).floor());
-        return GridView.count(
-          crossAxisCount: count,
+        final computed = math.max(minCrossAxisCount, (width / minItemWidth).floor());
+        final count = crossAxisCount ?? math.min(computed, maxCrossAxisCount);
+        final delegate = mainAxisExtent != null
+            ? SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: count,
+                mainAxisSpacing: gap,
+                crossAxisSpacing: gap,
+                mainAxisExtent: mainAxisExtent!,
+              )
+            : SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: count,
+                mainAxisSpacing: gap,
+                crossAxisSpacing: gap,
+                childAspectRatio: childAspectRatio,
+              );
+        return GridView(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: gap,
-          crossAxisSpacing: gap,
-          childAspectRatio: childAspectRatio,
+          gridDelegate: delegate,
           children: children,
         );
       },

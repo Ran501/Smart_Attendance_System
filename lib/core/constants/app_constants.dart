@@ -29,10 +29,10 @@ class AppConstants {
   static const int bleMinimumRssi = bleRssiMarkEnter;
 
   /// After a good reading, keep session visible this long (even if RSSI dips while moving).
-  static const int bleSessionHoldSeconds = 180;
+  static const int bleSessionHoldSeconds = 30;
 
   /// Keep "Mark attendance" enabled for this long after a strong reading.
-  static const int bleMarkHoldSeconds = 180;
+  static const int bleMarkHoldSeconds = 30;
 
   /// Rolling RSSI window (small = responsive; hold logic prevents flicker).
   static const int bleRssiMedianWindow = 7;

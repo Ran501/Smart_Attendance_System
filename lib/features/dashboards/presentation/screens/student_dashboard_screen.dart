@@ -284,9 +284,14 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     return statModules;
   }
 
+  double _contentTopInset(BuildContext context) {
+    return MediaQuery.paddingOf(context).top + kToolbarHeight + 8;
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authStateProvider).valueOrNull;
+    final textScaler = MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.12);
     return EnterpriseScaffold(
       appBar: AppBar(
         title: const Text(AppConstants.appName),
@@ -316,10 +321,12 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
         icon: const Icon(Icons.add),
         label: const Text('Join Module'),
       ),
-      body: RefreshIndicator(
+      body: MediaQuery(
+        data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+        child: RefreshIndicator(
         onRefresh: _refreshDashboard,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 94, 16, 110),
+          padding: EdgeInsets.fromLTRB(16, _contentTopInset(context), 16, 110),
           children: [
             _StudentHero(
               name: user?.fullName ?? 'Student',
@@ -357,8 +364,8 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
                           _loadingSessions
                               ? 'Scanning for teacher Bluetooth (within ${AppConstants.bleMaxDistanceMeters.toInt()} m)...'
                               : _proximity.values.any((p) => p.band == BleProximityBand.weak)
-                                  ? 'Teacher nearby — move a little closer for the session to unlock.'
-                                  : 'Session is live. Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m of your teacher with Bluetooth on.',
+                                  ? 'You are almost in range. Move a little closer (within ${AppConstants.bleMaxDistanceMeters.toInt()} m of your teacher).'
+                                  : 'You are outside range. A session is live — move closer to your teacher (within ${AppConstants.bleMaxDistanceMeters.toInt()} m) with Bluetooth on to mark attendance.',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                       ),
@@ -425,8 +432,8 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
             const SectionTitle(title: 'Quick Actions'),
             const SizedBox(height: 14),
             ResponsiveGrid(
-              minItemWidth: 170,
-              childAspectRatio: 1.22,
+              crossAxisCount: 2,
+              mainAxisExtent: 108,
               children: [
                 MetricTile(label: 'Present', value: '${_stats?['present'] ?? 0}', icon: Icons.check_circle_outline, color: const Color(0xFF10B981)),
                 MetricTile(label: 'Absent/Rejected', value: '${_stats?['absent'] ?? _stats?['rejected'] ?? 0}', icon: Icons.cancel_outlined, color: const Color(0xFFEF4444)),
@@ -442,6 +449,7 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
               onPressed: () => context.push('/history'),
             ),
           ],
+        ),
         ),
       ),
     );
