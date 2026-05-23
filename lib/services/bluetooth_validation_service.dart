@@ -37,16 +37,79 @@ class BluetoothValidationService {
   static String beaconName(String sessionId) =>
       BleSessionBeacon.displayName(sessionId);
 
+  /// Path-loss estimate for UI only (RSSI threshold is the real gate).
   static double estimateDistanceMeters(int rssi) {
-    const measuredPower = -55;
-    const pathLossExponent = 2.0;
-    final ratio = (measuredPower - rssi) / (10 * pathLossExponent);
-    return math.pow(10, ratio).toDouble().clamp(0.5, 100.0);
+    const pathLossExponent = 2.2;
+    final ratio =
+        (AppConstants.bleRssiAtOneMeter - rssi) / (10 * pathLossExponent);
+    return math
+        .pow(10, ratio)
+        .toDouble()
+        .clamp(0.5, AppConstants.bleMaxDistanceMeters + 5);
+  }
+
+  static bool rssiWithinRange(int rssi, {int? minimumRssi}) {
+    return rssi >= (minimumRssi ?? AppConstants.bleMinimumRssi);
+  }
+
+  /// One scan: which active session beacons are within Bluetooth range.
+  Future<Set<String>> scanNearbySessionIds({
+    required List<String> sessionIds,
+    int minimumRssi = AppConstants.bleMinimumRssi,
+    Duration timeout =
+        const Duration(seconds: AppConstants.bleNearbyScanSeconds),
+  }) async {
+    final targets = sessionIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet();
+    if (targets.isEmpty || kIsWeb) return {};
+
+    final bestRssiBySession = <String, int>{};
+
+    try {
+      if (!await _ensurePermissions()) return {};
+
+      final adapterState = await FlutterBluePlus.adapterState.first;
+      if (adapterState != BluetoothAdapterState.on) return {};
+
+      final sub = FlutterBluePlus.scanResults.listen((results) {
+        for (final result in results) {
+          for (final id in targets) {
+            if (!BleSessionBeacon.advertisementMatches(
+              result.advertisementData,
+              id,
+            )) {
+              continue;
+            }
+            final prev = bestRssiBySession[id];
+            if (prev == null || result.rssi > prev) {
+              bestRssiBySession[id] = result.rssi;
+            }
+          }
+        }
+      });
+
+      await FlutterBluePlus.startScan(
+        timeout: timeout,
+        androidScanMode: AndroidScanMode.lowLatency,
+        continuousUpdates: true,
+      );
+      await Future.delayed(timeout);
+      await FlutterBluePlus.stopScan();
+      await sub.cancel();
+    } catch (e) {
+      debugPrint('[BLE] nearby scan error: $e');
+    }
+
+    return bestRssiBySession.entries
+        .where((e) => rssiWithinRange(e.value, minimumRssi: minimumRssi))
+        .map((e) => e.key)
+        .toSet();
   }
 
   Future<BleValidationResult> scanForTeacherBeacon({
     required String sessionId,
-    String? expectedDeviceId,
     int minimumRssi = AppConstants.bleMinimumRssi,
     Duration timeout = const Duration(seconds: AppConstants.bleScanSeconds),
   }) async {
@@ -70,7 +133,8 @@ class BluetoothValidationService {
       if (!permissionsOk) {
         return const BleValidationResult(
           verified: false,
-          message: 'Bluetooth and nearby-device permissions are required',
+          message:
+              'Allow Bluetooth and Nearby devices (and Location if asked) in app settings',
         );
       }
 
@@ -84,21 +148,17 @@ class BluetoothValidationService {
 
       final expectedBeacon = beaconName(id);
       ScanResult? best;
-      var sawOurService = false;
+      var sawBeacon = false;
 
       final sub = FlutterBluePlus.scanResults.listen((results) {
         for (final result in results) {
-          final ad = result.advertisementData;
-          if (!BleSessionBeacon.advertisementMatches(ad, id)) continue;
-
-          sawOurService = true;
-
-          if (expectedDeviceId != null &&
-              result.device.remoteId.str.toLowerCase() !=
-                  expectedDeviceId.toLowerCase()) {
+          if (!BleSessionBeacon.advertisementMatches(
+            result.advertisementData,
+            id,
+          )) {
             continue;
           }
-
+          sawBeacon = true;
           if (best == null || result.rssi > best!.rssi) {
             best = result;
           }
@@ -111,16 +171,15 @@ class BluetoothValidationService {
         continuousUpdates: true,
       );
       await Future.delayed(timeout);
-
       await FlutterBluePlus.stopScan();
       await sub.cancel();
 
       if (best == null) {
         return BleValidationResult(
           verified: false,
-          message: sawOurService
-              ? 'Teacher Bluetooth found but signal too weak. Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m and try again.'
-              : 'Teacher beacon "$expectedBeacon" not found. Teacher must open the live session screen, enable Bluetooth, and allow Nearby devices — beacon should show ON.',
+          message: sawBeacon
+              ? 'Teacher Bluetooth found but signal too weak. Move closer (within ${AppConstants.bleMaxDistanceMeters.toInt()} m).'
+              : 'Teacher beacon "$expectedBeacon" not found. Teacher must keep the session screen open with Beacon ON.',
         );
       }
 
@@ -128,8 +187,8 @@ class BluetoothValidationService {
       final deviceName = best!.advertisementData.advName.isNotEmpty
           ? best!.advertisementData.advName
           : best!.device.platformName;
+      final verified = rssiWithinRange(rssi, minimumRssi: minimumRssi);
       final estM = estimateDistanceMeters(rssi);
-      final verified = rssi >= minimumRssi;
 
       return BleValidationResult(
         verified: verified,
@@ -137,8 +196,8 @@ class BluetoothValidationService {
         deviceId: best!.device.remoteId.str,
         deviceName: deviceName.isNotEmpty ? deviceName : expectedBeacon,
         message: verified
-            ? 'Within ${AppConstants.bleMaxDistanceMeters.toInt()} m of teacher (≈${estM.toStringAsFixed(0)} m)'
-            : 'Too far from teacher (≈${estM.toStringAsFixed(0)} m, max ${AppConstants.bleMaxDistanceMeters.toInt()} m). Move closer.',
+            ? 'Near teacher via Bluetooth (signal ${rssi} dBm, ≈${estM.toStringAsFixed(0)} m)'
+            : 'Move closer to your teacher (signal ${rssi} dBm). Stay within ${AppConstants.bleMaxDistanceMeters.toInt()} m.',
       );
     } catch (e) {
       return BleValidationResult(
@@ -152,7 +211,7 @@ class BluetoothValidationService {
     final scan = await Permission.bluetoothScan.request();
     final connect = await Permission.bluetoothConnect.request();
     await Permission.bluetoothAdvertise.request();
-    final location = await Permission.locationWhenInUse.request();
-    return scan.isGranted && connect.isGranted && location.isGranted;
+    await Permission.locationWhenInUse.request();
+    return scan.isGranted && connect.isGranted;
   }
 }

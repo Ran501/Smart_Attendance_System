@@ -1,7 +1,7 @@
 const pool = require('../database/pool');
 const config = require('../config');
 const { generateSessionId, generateSessionToken } = require('../utils/sessionId');
-const { checkHostProximity, DEFAULT_HOST_RADIUS } = require('../utils/geo');
+const { DEFAULT_HOST_RADIUS } = require('../utils/geo');
 const { logAudit } = require('../services/auditService');
 
 const DEFAULT_HOST_RADIUS_METERS = DEFAULT_HOST_RADIUS;

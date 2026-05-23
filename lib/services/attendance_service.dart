@@ -40,48 +40,10 @@ class AttendanceService {
     }
   }
 
-  Future<bool> updateSessionLocation({
-    required String sessionId,
-    required double latitude,
-    required double longitude,
-    double? accuracy,
-  }) async {
-    try {
-      final res = await _api.dio.patch('/sessions/$sessionId/location', data: {
-        'latitude': latitude,
-        'longitude': longitude,
-        if (accuracy != null) 'accuracy': accuracy,
-      });
-
-      final data = res.data;
-      if (data is Map && data['active'] == false) return false;
-      return true;
-    } on DioException catch (e) {
-      // A 404/410 can happen when the teacher page is still open but the
-      // session has already expired or was closed. Do not show this as an app
-      // error; the caller will stop the location timer.
-      if (e.response?.statusCode == 404 || e.response?.statusCode == 410) {
-        return false;
-      }
-      throw Exception(ApiClient.messageFromDio(e));
-    }
-  }
-
   Future<({List<Map<String, dynamic>> sessions, List<String> enrolledClassIds})>
-      getStudentActiveSessions({
-    double? latitude,
-    double? longitude,
-    double? accuracy,
-  }) async {
+      getStudentActiveSessions() async {
     try {
-      final res = await _api.dio.get(
-        '/sessions/student/active',
-        queryParameters: {
-          if (latitude != null) 'latitude': latitude,
-          if (longitude != null) 'longitude': longitude,
-          if (accuracy != null) 'accuracy': accuracy,
-        },
-      );
+      final res = await _api.dio.get('/sessions/student/active');
       final data = res.data;
       if (data is List) {
         return (

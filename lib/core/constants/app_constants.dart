@@ -13,19 +13,17 @@ class AppConstants {
   /// Attendance proximity: Bluetooth only (max 10 m from teacher phone).
   static const double bleMaxDistanceMeters = 10;
 
-  /// Stronger (less negative) RSSI = closer. ~-72 dBm ≈ 10 m for typical phones.
-  static const int bleStrongRssi = -65;
-  static const int bleMinimumRssi = -72;
-  static const int bleScanSeconds = 12;
+  /// RSSI at ~1 m (reference for distance estimate only).
+  static const int bleRssiAtOneMeter = -58;
 
-  /// GPS geofence: base radius the teacher's session covers.
-  static const double hostSessionBaseRadiusMeters = 50;
+  /// Accept attendance when beacon matches and RSSI is at or above this (~10–12 m).
+  static const int bleMinimumRssi = -88;
 
-  /// Fixed buffer added on top of accuracy readings to absorb GPS drift.
-  static const double gpsFixedBufferMeters = 10;
+  /// Strong signal (typically under ~5 m).
+  static const int bleStrongRssi = -75;
 
-  /// Cap on the accuracy value used in radius calculation (avoid huge bubbles).
-  static const double maxAccuracyBufferMeters = 30;
+  static const int bleScanSeconds = 14;
+  static const int bleNearbyScanSeconds = 8;
 
   /// MobileFaceNet output (runtime-detected; 128 or 192 depending on model file).
   static const int embeddingSize = 192;

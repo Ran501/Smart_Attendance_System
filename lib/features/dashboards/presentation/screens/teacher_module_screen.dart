@@ -698,6 +698,7 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<int>(
+                    isExpanded: true,
                     value: _sessionUnits,
                     decoration: const InputDecoration(labelText: 'Count this attendance as', prefixIcon: Icon(Icons.view_timeline_outlined)),
                     items: const [

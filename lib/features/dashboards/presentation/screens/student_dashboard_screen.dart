@@ -11,6 +11,7 @@ import '../../../../core/providers/auth_provider.dart';
 import '../../../../core/providers/theme_provider.dart';
 import '../../../../services/api_client.dart';
 import '../../../../services/attendance_service.dart';
+import '../../../../services/bluetooth_validation_service.dart';
 import '../../../../services/catalog_service.dart';
 import '../../../../services/face_registration_service.dart';
 import '../../../../widgets/app_brand_logo.dart';
@@ -33,18 +34,22 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
   List<String> _enrolledClassIds = [];
   bool _loadingSessions = false;
   io.Socket? _socket;
-  Timer? _locationRefreshTimer;
+  Timer? _sessionRefreshTimer;
+  int _apiSessionCount = 0;
+  final _ble = BluetoothValidationService();
+
   @override
   void initState() {
     super.initState();
     _load();
     _connectSocket();
-    _locationRefreshTimer = Timer.periodic(const Duration(seconds: 8), (_) => _loadActiveSessions());
+    _sessionRefreshTimer =
+        Timer.periodic(const Duration(seconds: 10), (_) => _loadActiveSessions());
   }
 
   @override
   void dispose() {
-    _locationRefreshTimer?.cancel();
+    _sessionRefreshTimer?.cancel();
     _socket?.disconnect();
     _socket?.dispose();
     super.dispose();
@@ -103,9 +108,22 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     setState(() => _loadingSessions = true);
     try {
       final result = await AttendanceService().getStudentActiveSessions();
+      final all = result.sessions;
+      var nearby = <Map<String, dynamic>>[];
+      if (all.isNotEmpty) {
+        final ids = all
+            .map((s) => (s['id'] ?? s['session_id'] ?? '').toString())
+            .where((id) => id.isNotEmpty)
+            .toList();
+        final inRange = await _ble.scanNearbySessionIds(sessionIds: ids);
+        nearby = all
+            .where((s) => inRange.contains((s['id'] ?? s['session_id'] ?? '').toString()))
+            .toList();
+      }
       if (mounted) {
         setState(() {
-          _activeSessions = result.sessions;
+          _apiSessionCount = all.length;
+          _activeSessions = nearby;
           _enrolledClassIds = result.enrolledClassIds;
         });
         _joinClassRooms();
@@ -298,15 +316,29 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
                 padding: const EdgeInsets.all(16),
                 child: Row(
                   children: [
-                    Icon(Icons.sensors_off_outlined, color: Theme.of(context).colorScheme.outline),
+                    Icon(
+                      _apiSessionCount > 0
+                          ? Icons.bluetooth_searching
+                          : Icons.sensors_off_outlined,
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        _loadingSessions ? 'Checking for live attendance sessions...' : 'No live session currently active.',
+                        _loadingSessions
+                            ? 'Scanning for teacher Bluetooth (within ${AppConstants.bleMaxDistanceMeters.toInt()} m)...'
+                            : _apiSessionCount > 0
+                                ? 'A session is active but you are not in range. Move within ${AppConstants.bleMaxDistanceMeters.toInt()} m of your teacher with Bluetooth on.'
+                                : 'No live session currently active.',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                     ),
-                    if (_loadingSessions) const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                    if (_loadingSessions)
+                      const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
                   ],
                 ),
               ),

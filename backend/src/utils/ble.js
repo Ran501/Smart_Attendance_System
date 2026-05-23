@@ -1,5 +1,5 @@
 const BLE_MAX_DISTANCE_METERS = parseFloat(process.env.BLE_MAX_DISTANCE_METERS || '10');
-const BLE_MIN_RSSI = parseInt(process.env.BLE_MIN_RSSI || '-72', 10);
+const BLE_MIN_RSSI = parseInt(process.env.BLE_MIN_RSSI || '-88', 10);
 
 function validateBleProximity({ bleVerified, bleRssi }) {
   if (bleVerified !== true) {

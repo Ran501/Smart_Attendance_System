@@ -219,11 +219,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
       final sessionId = widget.sessionData['sessionId']?.toString() ?? '';
       setState(() => _instruction = 'Scanning for teacher Bluetooth (within 10 m)...');
 
-      final bleResult = await _ble.scanForTeacherBeacon(
-        sessionId: sessionId,
-        expectedDeviceId: widget.sessionData['ble_device_id'] as String? ??
-            widget.sessionData['bleDeviceId'] as String?,
-      );
+      final bleResult = await _ble.scanForTeacherBeacon(sessionId: sessionId);
       setState(() => _bleVerified = bleResult.verified);
       if (!bleResult.verified) {
         _showResult(false, bleResult.message);

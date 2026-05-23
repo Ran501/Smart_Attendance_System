@@ -156,14 +156,13 @@ class ReportService {
     required List<Map<String, dynamic>> records,
   }) async {
     final rows = [
-      ['Student', 'Student ID', 'Status', 'Confidence', 'Geo Valid', 'WiFi Valid', 'Time'],
+      ['Student', 'Student ID', 'Status', 'Confidence', 'BLE OK', 'Time'],
       ...records.map((r) => [
             r['full_name'] ?? '',
             r['student_code'] ?? '',
             r['status'] ?? '',
             '${((r['match_confidence'] as num? ?? 0) * 100).toStringAsFixed(1)}%',
-            '${r['geo_valid'] ?? false}',
-            '${r['wifi_valid'] ?? false}',
+            '${r['ble_verified'] ?? r['geo_valid'] ?? false}',
             r['marked_at']?.toString() ?? '',
           ]),
     ];
@@ -188,13 +187,13 @@ class ReportService {
           pw.Text('Date: ${session['started_at'] ?? ''}'),
           pw.SizedBox(height: 20),
           pw.TableHelper.fromTextArray(
-            headers: const ['Student', 'Status', 'Confidence', 'GPS OK'],
+            headers: const ['Student', 'Status', 'Confidence', 'BLE OK'],
             data: records
                 .map((r) => [
                       r['full_name'] ?? '',
                       r['status'] ?? '',
                       '${((r['match_confidence'] as num? ?? 0) * 100).toStringAsFixed(1)}%',
-                      '${r['geo_valid'] ?? false}',
+                      '${r['ble_verified'] ?? r['geo_valid'] ?? false}',
                     ])
                 .toList(),
           ),

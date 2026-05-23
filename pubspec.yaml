@@ -18,11 +18,9 @@ dependencies:
   camera: ^0.11.1
   tflite_flutter: ^0.11.0
   google_mlkit_face_detection: ^0.12.0
-  geolocator: ^13.0.4
   permission_handler: ^11.4.0
   mobile_scanner: ^6.0.6
   connectivity_plus: ^6.1.4
-  network_info_plus: ^6.1.4
   device_info_plus: ^11.3.3
   uuid: ^4.5.1
   intl: ^0.20.2
@@ -46,7 +44,6 @@ dependencies:
   lottie: ^3.3.0
   cached_network_image: ^3.4.1
   printing: ^5.14.2
-  wifi_iot: ^0.3.19+2
 dev_dependencies:
   flutter_test:
     sdk: flutter
