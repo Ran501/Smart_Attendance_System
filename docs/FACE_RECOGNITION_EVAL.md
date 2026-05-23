@@ -12,7 +12,7 @@
 | Post-process | L2 normalize | L2 normalize (`prepareEmbedding`) |
 | Enroll | Send 5 pose vectors | Average 5 → `template` row + pose rows |
 | Verify | Send live vector | Cosine vs `template` (fallback: legacy poses) |
-| Threshold | `AppConstants.faceMatchThreshold` = **0.75** | `FACE_MATCH_THRESHOLD` = **0.75** |
+| Threshold | `AppConstants.faceMatchThreshold` = **0.65** | `FACE_MATCH_THRESHOLD` = **0.65** |
 
 Spec version: `1.0.0` — see `lib/core/face/face_preprocess_spec.dart` and `backend/src/utils/facePreprocess.js`.
 
@@ -22,7 +22,7 @@ Spec version: `1.0.0` — see `lib/core/face/face_preprocess_spec.dart` and `bac
 2. **Alignment** — ML Kit eye landmarks in `FacePreprocessor.prepareAlignedFace`.
 3. **Identical server pipeline** — shared spec + L2 normalize + template averaging on server.
 4. **Enrollment** — server averages 5 poses into `angle_type = template`.
-5. **Threshold** — 0.75 default; run `npm run face:eval` to sweep FAR/FRR.
+5. **Threshold** — 0.65 default; run `npm run face:eval` to sweep FAR/FRR.
 6. **Metrics** — synthetic evaluation script reports before/after FAR/FRR.
 
 ## Run evaluation
@@ -32,7 +32,7 @@ cd backend
 npm run face:eval
 ```
 
-### Latest synthetic run (`npm run face:eval`, n=500, threshold=0.75)
+### Latest synthetic run (`npm run face:eval`, n=500, threshold=0.65)
 
 | Pipeline | FRR | FAR | Genuine mean | Impostor mean |
 |----------|-----|-----|--------------|---------------|
@@ -47,4 +47,4 @@ All students should **re-register face** (5 poses) so the new alignment + averag
 
 ## Railway
 
-Set `FACE_MATCH_THRESHOLD=0.75` and redeploy backend.
+Set `FACE_MATCH_THRESHOLD=0.65` and redeploy backend.
