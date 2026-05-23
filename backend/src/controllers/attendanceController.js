@@ -283,12 +283,16 @@ async function submitAttendance(req, res) {
   });
 
   if (req.io) {
-    req.io.to(`session:${sessionId}`).emit('attendance:marked', {
+    const markedPayload = {
       sessionId,
+      classId: session.class_id,
       studentId: req.user.id,
       status,
       confidence: matchScore,
-    });
+    };
+    req.io.to(`session:${sessionId}`).emit('attendance:marked', markedPayload);
+    req.io.to(`class:${session.class_id}`).emit('attendance:marked', markedPayload);
+    req.io.to(`class:${session.class_id}`).emit('attendance:updated', markedPayload);
   }
 
   res.json({

@@ -53,6 +53,12 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     super.dispose();
   }
 
+  /// Reload stats, modules, and live sessions (e.g. after marking attendance).
+  Future<void> _refreshDashboard() async {
+    if (!mounted) return;
+    await _load();
+  }
+
   Future<void> _load() async {
     Map<String, dynamic>? stats;
     var registered = _faceRegistered;
@@ -85,7 +91,8 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     _socket!.connect();
     _socket!.on('session:started', (_) => _loadActiveSessions());
     _socket!.on('session:closed', (_) => _loadActiveSessions());
-    _socket!.on('attendance:updated', (_) => _load());
+    _socket!.on('attendance:updated', (_) => _refreshDashboard());
+    _socket!.on('attendance:marked', (_) => _refreshDashboard());
   }
 
   void _joinClassRooms() {
@@ -178,11 +185,16 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
       return;
     }
 
-    context.push('/live-auth', extra: {
-      'sessionId': session['id'],
-      'sessionToken': session['session_token'],
-      'session': session,
-    });
+    await context.push<bool>(
+      '/live-auth',
+      extra: {
+        'sessionId': session['id'],
+        'sessionToken': session['session_token'],
+        'session': session,
+      },
+    );
+    if (!mounted) return;
+    await _refreshDashboard();
   }
 
   Future<void> _showJoinModuleSheet() async {
@@ -285,7 +297,7 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
         label: const Text('Join Module'),
       ),
       body: RefreshIndicator(
-        onRefresh: _load,
+        onRefresh: _refreshDashboard,
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 94, 16, 110),
           children: [
@@ -339,7 +351,15 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
                 ),
               )
             else
-              ..._modules().map((m) => _ModuleAttendanceCard(data: m, onTap: () => context.push('/module-details', extra: m)).animate().fadeIn(duration: 400.ms)),
+              ..._modules().map(
+                (m) => _ModuleAttendanceCard(
+                  data: m,
+                  onTap: () async {
+                    await context.push('/module-details', extra: m);
+                    if (mounted) await _refreshDashboard();
+                  },
+                ).animate().fadeIn(duration: 400.ms),
+              ),
             const SizedBox(height: 24),
             const SectionTitle(title: 'Quick Actions'),
             const SizedBox(height: 14),

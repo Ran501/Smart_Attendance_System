@@ -392,7 +392,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              if (context.mounted) context.go('/student');
+              if (context.mounted) Navigator.of(context).pop(success);
             },
             child: const Text('OK'),
           ),
