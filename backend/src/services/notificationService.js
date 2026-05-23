@@ -79,21 +79,27 @@ function buildFcmMessage({ token, type, title, body, data }) {
     data: dataPayload,
     android: {
       priority: 'high',
+      ttl: 86400,
       notification: {
         channelId: 'attendance_alerts_v2',
         sound: 'default',
         defaultSound: true,
         defaultVibrateTimings: true,
-        priority: 'high',
+        priority: 'max',
         visibility: 'public',
+        notificationCount: 1,
       },
     },
     apns: {
+      headers: {
+        'apns-priority': '10',
+      },
       payload: {
         aps: {
           alert: { title, body },
           sound: 'default',
           badge: 1,
+          'content-available': 1,
         },
       },
     },

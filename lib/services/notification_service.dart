@@ -184,17 +184,58 @@ class NotificationService {
     final type = data['type']?.toString() ?? '';
 
     if (type == 'SESSION_STARTED') {
-      await showLiveSessionFromPayloadOnce(Map<String, dynamic>.from(data));
-      await unreadCountNotifier.refresh();
+      await _showSessionStartedTray(
+        data: data,
+        fallbackTitle: notification?.title,
+        fallbackBody: notification?.body,
+        notificationId: message.hashCode,
+      );
       return;
     }
 
-    final title = notification?.title ?? data['title'] ?? _titleForType(type);
-    final body = notification?.body ?? data['body'];
+    final title =
+        notification?.title ?? data['title']?.toString() ?? _titleForType(type);
+    final body = notification?.body ?? data['body']?.toString();
     if (title == null || title.isEmpty || body == null || body.isEmpty) return;
 
     await _showTrayNotification(
       id: message.hashCode,
+      title: title,
+      body: body,
+    );
+  }
+
+  Future<void> _showSessionStartedTray({
+    required Map<String, dynamic> data,
+    String? fallbackTitle,
+    String? fallbackBody,
+    int? notificationId,
+  }) async {
+    final sessionId = _sessionIdFromPayload(data);
+    if (sessionId != null) {
+      if (_announcedLiveSessionIds.contains(sessionId)) return;
+      _announcedLiveSessionIds.add(sessionId);
+    }
+
+    final subject = data['subjectName'] ??
+        data['subject_name'] ??
+        data['subject_code'] ??
+        'Your module';
+    final className = data['className'] ?? data['class_name'] ?? '';
+    final range =
+        data['ble_max_distance_meters'] ?? data['bleMaxDistanceMeters'] ?? 20;
+
+    final title = fallbackTitle?.trim().isNotEmpty == true
+        ? fallbackTitle!.trim()
+        : 'Live attendance session';
+    final body = fallbackBody?.trim().isNotEmpty == true
+        ? fallbackBody!.trim()
+        : className.toString().isNotEmpty
+            ? '$subject ($className) is live. Mark attendance within $range m.'
+            : '$subject is live. Mark attendance within $range m.';
+
+    await _showTrayNotification(
+      id: notificationId ?? sessionId?.hashCode ?? DateTime.now().millisecondsSinceEpoch,
       title: title,
       body: body,
     );
@@ -223,26 +264,10 @@ class NotificationService {
 
   /// Show live-session tray once per session id (socket + FCM safe).
   Future<void> showLiveSessionFromPayloadOnce(Map<String, dynamic> payload) async {
-    final sessionId = _sessionIdFromPayload(payload);
-    if (sessionId != null) {
-      if (_announcedLiveSessionIds.contains(sessionId)) return;
-      _announcedLiveSessionIds.add(sessionId);
-    }
-
-    final subject =
-        payload['subjectName'] ?? payload['subject_name'] ?? payload['subject_code'] ?? 'Your module';
-    final className = payload['className'] ?? payload['class_name'] ?? '';
-    final range = payload['ble_max_distance_meters'] ?? payload['bleMaxDistanceMeters'] ?? 20;
-
-    const title = 'Live attendance session';
-    final body = className.toString().isNotEmpty
-        ? '$subject ($className) is live. Mark attendance within $range m.'
-        : '$subject is live. Mark attendance within $range m.';
-
-    await showSessionStartedAlert(
-      title: title,
-      body: body,
-      notificationId: sessionId?.hashCode,
+    await ensureReadyForBackground();
+    await _showSessionStartedTray(
+      data: payload,
+      notificationId: _sessionIdFromPayload(payload)?.hashCode,
     );
   }
 

@@ -17,19 +17,30 @@ class SmartAttendanceApp extends ConsumerStatefulWidget {
   ConsumerState<SmartAttendanceApp> createState() => _SmartAttendanceAppState();
 }
 
-class _SmartAttendanceAppState extends ConsumerState<SmartAttendanceApp> {
+class _SmartAttendanceAppState extends ConsumerState<SmartAttendanceApp>
+    with WidgetsBindingObserver {
   bool _reloginPromptOpen = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     SessionAuthGuard.onReloginRequired = _handleReloginRequired;
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     SessionAuthGuard.onReloginRequired = null;
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      NotificationService.instance.syncTokenWithBackend();
+      unreadCountNotifier.refresh();
+    }
   }
 
   Future<void> _handleReloginRequired() async {

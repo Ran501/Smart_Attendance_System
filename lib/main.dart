@@ -14,11 +14,16 @@ import 'services/notification_service.dart';
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  await NotificationService.instance.ensureReadyForBackground();
-
-  // Show via our channel so sound + vibration always use attendance_alerts settings.
-  await NotificationService.instance.showLocalNotification(message);
+  try {
+    await Firebase.initializeApp();
+    await NotificationService.instance.ensureReadyForBackground();
+    // Tray + sound via our channel when the app is backgrounded or killed.
+    await NotificationService.instance.showLocalNotification(message);
+  } catch (e, st) {
+    if (kDebugMode) {
+      debugPrint('[FCM] background handler failed: $e\n$st');
+    }
+  }
 }
 
 void main() async {
