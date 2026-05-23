@@ -122,9 +122,19 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     _socket!.on('session:closed', (_) => _fetchSessionsFromApi());
     _socket!.on('attendance:updated', (_) => _refreshDashboard());
     _socket!.on('attendance:marked', (_) => _refreshDashboard());
+    _socket!.on('attendance:record-updated', (_) => _refreshDashboard());
+    _joinStudentRoom();
+  }
+
+  void _joinStudentRoom() {
+    final user = ref.read(authStateProvider).valueOrNull;
+    if (user?.id != null) {
+      _socket?.emit('join:student', user!.id);
+    }
   }
 
   void _joinClassRooms() {
+    _joinStudentRoom();
     for (final id in _enrolledClassIds) {
       _socket?.emit('join:class', id);
     }

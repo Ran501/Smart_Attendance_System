@@ -1,7 +1,7 @@
 const pool = require('../database/pool');
 const config = require('../config');
 const { validateBleProximity } = require('../utils/ble');
-const { upsertAttendanceRecord } = require('../utils/dbCompat');
+const { upsertAttendanceRecord, setAttendanceStatus } = require('../utils/dbCompat');
 const { evaluateFaceMatch } = require('../utils/face');
 const { logAudit, logFraud } = require('../services/auditService');
 const { expireStaleSessions } = require('./sessionController');
@@ -210,6 +210,8 @@ async function submitAttendance(req, res) {
     req.io.to(`session:${sessionId}`).emit('attendance:marked', markedPayload);
     req.io.to(`class:${session.class_id}`).emit('attendance:marked', markedPayload);
     req.io.to(`class:${session.class_id}`).emit('attendance:updated', markedPayload);
+    req.io.to(`student:${req.user.id}`).emit('attendance:marked', markedPayload);
+    req.io.to(`student:${req.user.id}`).emit('attendance:updated', markedPayload);
   }
 
   res.json({
@@ -307,50 +309,89 @@ async function getStudentStats(req, res) {
 }
 
 async function updateAttendanceStatus(req, res) {
-  const { sessionId } = req.params;
-  const status = normalizeStatus(req.body.status);
-  if (!EDITABLE_STATUSES.has(status)) {
-    return res.status(400).json({ error: 'Invalid attendance status' });
-  }
+  try {
+    const sessionId =
+      req.params.sessionId || req.body.sessionId || req.body.session_id;
+    let recordId =
+      req.params.recordId ||
+      req.body.recordId ||
+      req.body.record_id ||
+      req.body.attendanceId;
+    let studentId =
+      req.params.studentId || req.body.studentId || req.body.student_id;
 
-  const session = await pool.query(
-    'SELECT id, class_id, teacher_id FROM attendance_sessions WHERE id = $1',
-    [sessionId],
-  );
-  if (!session.rows.length) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
-  if (req.user.role === 'teacher' && session.rows[0].teacher_id !== req.user.id) {
-    return res.status(403).json({ error: 'Not your session' });
-  }
+    const status = normalizeStatus(req.body.status || req.body.attendanceStatus);
+    if (!EDITABLE_STATUSES.has(status)) {
+      return res.status(400).json({ error: 'Invalid attendance status' });
+    }
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId required' });
+    }
 
-  const { recordId, studentId } = req.body;
-  if (recordId) {
-    await pool.query(
-      `UPDATE attendance_records SET status = $1, updated_by = $2, updated_at = NOW()
-       WHERE id = $3 AND session_id = $4`,
-      [status, req.user.id, recordId, sessionId],
+    const session = await pool.query(
+      'SELECT id, class_id, teacher_id FROM attendance_sessions WHERE id = $1',
+      [sessionId],
     );
-  } else if (studentId) {
-    await pool.query(
-      `INSERT INTO attendance_records (session_id, class_id, student_id, status, updated_by, updated_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       ON CONFLICT (session_id, student_id) DO UPDATE SET
-         status = EXCLUDED.status,
-         updated_by = EXCLUDED.updated_by,
-         updated_at = NOW()`,
-      [sessionId, session.rows[0].class_id, studentId, status, req.user.id],
-    );
-  } else {
-    return res.status(400).json({ error: 'recordId or studentId required' });
-  }
+    if (!session.rows.length) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    const classId = session.rows[0].class_id;
+    if (req.user.role === 'teacher' && session.rows[0].teacher_id !== req.user.id) {
+      return res.status(403).json({ error: 'Not your session' });
+    }
 
-  if (req.io) {
-    req.io.to(`session:${sessionId}`).emit('attendance:record-updated', { sessionId, status });
-    req.io.to(`class:${session.rows[0].class_id}`).emit('attendance:updated', { sessionId, status });
-  }
+    if (!studentId && recordId) {
+      const existing = await pool.query(
+        'SELECT student_id FROM attendance_records WHERE id = $1 AND session_id = $2',
+        [recordId, sessionId],
+      );
+      if (existing.rows.length) {
+        studentId = existing.rows[0].student_id;
+      }
+    }
 
-  res.json({ ok: true, status });
+    if (!recordId && !studentId) {
+      return res.status(400).json({ error: 'recordId or studentId required' });
+    }
+
+    const row = await setAttendanceStatus(pool, {
+      sessionId,
+      classId,
+      studentId,
+      recordId,
+      status,
+      updatedBy: req.user.id,
+    });
+
+    if (!row) {
+      return res.status(404).json({ error: 'Attendance record not found' });
+    }
+
+    const payload = {
+      sessionId,
+      classId,
+      studentId: row.student_id || studentId,
+      recordId: row.id || recordId,
+      status,
+    };
+
+    if (req.io) {
+      req.io.to(`session:${sessionId}`).emit('attendance:record-updated', payload);
+      req.io.to(`class:${classId}`).emit('attendance:updated', payload);
+      req.io.to(`class:${classId}`).emit('attendance:marked', payload);
+      if (payload.studentId) {
+        req.io.to(`student:${payload.studentId}`).emit('attendance:record-updated', payload);
+        req.io.to(`student:${payload.studentId}`).emit('attendance:updated', payload);
+      }
+    }
+
+    res.json({ ok: true, ...payload });
+  } catch (err) {
+    console.error('[attendance] updateAttendanceStatus failed:', err);
+    res.status(500).json({
+      error: err.message || 'Could not update attendance record',
+    });
+  }
 }
 
 module.exports = {

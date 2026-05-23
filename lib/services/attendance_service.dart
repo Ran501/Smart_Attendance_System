@@ -362,11 +362,11 @@ class AttendanceService {
     };
 
     final attempts = <({String method, String path})>[
+      (method: 'post', path: '/attendance/update'),
+      if (studentId != null) (method: 'patch', path: '/sessions/$sessionId/attendance/$studentId'),
+      if (recordId != null) (method: 'patch', path: '/attendance/records/$recordId'),
       if (recordId != null) (method: 'patch', path: '/attendance/$recordId/status'),
       if (recordId != null) (method: 'patch', path: '/attendance/$recordId'),
-      if (recordId != null) (method: 'patch', path: '/attendance/records/$recordId'),
-      if (studentId != null) (method: 'patch', path: '/sessions/$sessionId/attendance/$studentId'),
-      (method: 'post', path: '/attendance/update'),
     ];
 
     DioException? lastError;

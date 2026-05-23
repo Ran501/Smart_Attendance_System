@@ -276,11 +276,11 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   }
 
   String? _recordId(Map<String, dynamic> m) {
-    return (m['id'] ?? m['attendance_id'] ?? m['attendanceId'] ?? m['record_id'] ?? m['recordId'])?.toString();
+    return (m['record_id'] ?? m['recordId'] ?? m['attendance_id'] ?? m['attendanceId'] ?? m['id'])?.toString();
   }
 
   String? _studentId(Map<String, dynamic> m) {
-    return (m['student_id'] ?? m['studentId'] ?? m['user_id'] ?? m['userId'] ?? m['cid'] ?? m['student_no'])?.toString();
+    return (m['user_id'] ?? m['userId'] ?? m['student_uuid'] ?? m['student_id'] ?? m['studentId'])?.toString();
   }
 
   String _recordKey(Map<String, dynamic> m) => _recordId(m) ?? _studentId(m) ?? _studentName(m);
@@ -290,6 +290,16 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
     if (raw is! num) return 'Face confidence not recorded';
     final value = raw <= 1 ? raw * 100 : raw;
     return 'Face confidence ${value.toStringAsFixed(0)}%';
+  }
+
+  void _applyLocalStatus(Map<String, dynamic> record, String status) {
+    final idx = _attendance.indexWhere((r) => _recordKey(r) == _recordKey(record));
+    if (idx < 0) return;
+    final updated = Map<String, dynamic>.from(_attendance[idx]);
+    updated['status'] = status;
+    updated['attendance_status'] = status;
+    updated['attendanceStatus'] = status;
+    _attendance[idx] = updated;
   }
 
   Future<void> _changeStatus(Map<String, dynamic> record, String status) async {
@@ -303,6 +313,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
         studentId: _studentId(record),
       );
       if (mounted) {
+        setState(() => _applyLocalStatus(record, status));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('${_studentName(record)} marked as ${_labelOf(status)}')),
         );

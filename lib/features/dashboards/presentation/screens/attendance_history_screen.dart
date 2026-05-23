@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:socket_io_client/socket_io_client.dart' as io;
+import '../../../../core/config/api_config.dart';
 import '../../../../models/attendance_record_model.dart';
 import '../../../../services/attendance_service.dart';
+import '../../../../services/auth_service.dart';
 
 class AttendanceHistoryScreen extends StatefulWidget {
   const AttendanceHistoryScreen({super.key});
@@ -12,11 +15,32 @@ class AttendanceHistoryScreen extends StatefulWidget {
 
 class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
   List<AttendanceRecordModel> _records = [];
+  io.Socket? _socket;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _connectSocket();
+  }
+
+  @override
+  void dispose() {
+    _socket?.disconnect();
+    _socket?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _connectSocket() async {
+    _socket = io.io(ApiConfig.socketOrigin, io.OptionBuilder().setTransports(['websocket']).build());
+    _socket!.connect();
+    final user = await AuthService().restoreSession();
+    if (user?.id != null) {
+      _socket!.emit('join:student', user!.id);
+    }
+    _socket!.on('attendance:updated', (_) => _load());
+    _socket!.on('attendance:marked', (_) => _load());
+    _socket!.on('attendance:record-updated', (_) => _load());
   }
 
   Future<void> _load() async {

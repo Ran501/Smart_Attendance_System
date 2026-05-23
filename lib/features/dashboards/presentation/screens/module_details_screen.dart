@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:socket_io_client/socket_io_client.dart' as io;
+import '../../../../core/config/api_config.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../services/attendance_service.dart';
+import '../../../../services/auth_service.dart';
 import '../../../../widgets/enterprise_shell.dart';
 
 class ModuleDetailsScreen extends StatefulWidget {
@@ -19,11 +22,47 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
   List<Map<String, dynamic>> _sessions = [];
   bool _loading = false;
   String? _error;
+  io.Socket? _socket;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _connectSocket();
+  }
+
+  @override
+  void dispose() {
+    _socket?.disconnect();
+    _socket?.dispose();
+    super.dispose();
+  }
+
+  String? get _classIdForSocket {
+    final raw = module['class_id'] ??
+        module['classId'] ??
+        module['module_id'] ??
+        module['moduleId'] ??
+        module['subject_id'] ??
+        module['subjectId'];
+    final id = raw?.toString().trim();
+    return (id == null || id.isEmpty) ? null : id;
+  }
+
+  Future<void> _connectSocket() async {
+    _socket = io.io(ApiConfig.socketOrigin, io.OptionBuilder().setTransports(['websocket']).build());
+    _socket!.connect();
+    final classId = _classIdForSocket;
+    if (classId != null) {
+      _socket!.emit('join:class', classId);
+    }
+    final user = await AuthService().restoreSession();
+    if (user?.id != null) {
+      _socket!.emit('join:student', user!.id);
+    }
+    _socket!.on('attendance:updated', (_) => _load());
+    _socket!.on('attendance:marked', (_) => _load());
+    _socket!.on('attendance:record-updated', (_) => _load());
   }
 
   Map<String, dynamic> get module => widget.module;

@@ -51,6 +51,12 @@ io.on('connection', (socket) => {
   socket.on('leave:class', (classId) => {
     if (classId) socket.leave(`class:${classId}`);
   });
+  socket.on('join:student', (studentId) => {
+    if (studentId) socket.join(`student:${studentId}`);
+  });
+  socket.on('leave:student', (studentId) => {
+    if (studentId) socket.leave(`student:${studentId}`);
+  });
 });
 
 async function start() {
