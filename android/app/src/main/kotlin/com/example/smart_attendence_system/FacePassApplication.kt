@@ -1,8 +1,8 @@
 package com.example.smart_attendence_system
 
-import io.flutter.embedding.android.FlutterApplication
+import android.app.Application
 
-class FacePassApplication : FlutterApplication() {
+class FacePassApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AttendanceNotificationChannels.ensureCreated(this)
