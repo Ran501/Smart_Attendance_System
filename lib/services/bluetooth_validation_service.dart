@@ -108,36 +108,9 @@ class BluetoothValidationService {
       await FlutterBluePlus.startScan(
         timeout: timeout,
         androidScanMode: AndroidScanMode.lowLatency,
-        withServices: [BleSessionBeacon.serviceGuid],
         continuousUpdates: true,
       );
       await Future.delayed(timeout);
-
-      // Fallback: some phones omit service UUID in the filter path — scan all.
-      if (best == null) {
-        await FlutterBluePlus.stopScan();
-        await sub.cancel();
-        final sub2 = FlutterBluePlus.scanResults.listen((results) {
-          for (final result in results) {
-            if (!BleSessionBeacon.advertisementMatches(
-              result.advertisementData,
-              id,
-            )) {
-              continue;
-            }
-            if (best == null || result.rssi > best!.rssi) {
-              best = result;
-            }
-          }
-        });
-        await FlutterBluePlus.startScan(
-          timeout: const Duration(seconds: 6),
-          androidScanMode: AndroidScanMode.lowLatency,
-          continuousUpdates: true,
-        );
-        await Future.delayed(const Duration(seconds: 6));
-        await sub2.cancel();
-      }
 
       await FlutterBluePlus.stopScan();
       await sub.cancel();

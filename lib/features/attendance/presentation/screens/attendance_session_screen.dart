@@ -40,20 +40,23 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
   }
 
   Future<void> _startBleBeacon() async {
-    final ok = await TeacherBleBeaconService.instance.start(widget.sessionId);
-    if (mounted) {
-      setState(() => _beaconActive = ok);
-      if (!ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Could not start Bluetooth beacon. Enable Bluetooth and allow Nearby devices permission, then reopen this screen.',
-            ),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 6),
-          ),
-        );
-      }
+    final result = await TeacherBleBeaconService.instance.start(widget.sessionId);
+    if (!mounted) return;
+    setState(() => _beaconActive = result.success);
+    if (!result.success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.message),
+          backgroundColor: Colors.orange,
+          duration: const Duration(seconds: 8),
+          action: result.openSettings
+              ? SnackBarAction(
+                  label: 'Settings',
+                  onPressed: () => TeacherBleBeaconService.instance.openAppSettings(),
+                )
+              : null,
+        ),
+      );
     }
   }
 
@@ -398,10 +401,21 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
                   const SizedBox(height: 12),
                   SelectableText(beaconName, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
                   const SizedBox(height: 8),
-                  StatusPill(
-                    label: _beaconActive ? 'Beacon ON' : 'Beacon OFF',
-                    icon: Icons.bluetooth,
-                    color: _beaconActive ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                  Row(
+                    children: [
+                      StatusPill(
+                        label: _beaconActive ? 'Beacon ON' : 'Beacon OFF',
+                        icon: Icons.bluetooth,
+                        color: _beaconActive ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                      ),
+                      const Spacer(),
+                      if (!_beaconActive)
+                        FilledButton.icon(
+                          onPressed: _startBleBeacon,
+                          icon: const Icon(Icons.bluetooth_searching, size: 18),
+                          label: const Text('Start beacon'),
+                        ),
+                    ],
                   ),
                 ],
               ),
@@ -448,7 +462,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
                   children: [
                     const Icon(Icons.warning_amber_rounded, color: Color(0xFFF97316)),
                     const SizedBox(width: 10),
-                    Expanded(child: Text('$_rejectedCount rejected attempts were detected for this session. Review face, BLE, WiFi, and location checks before changing records manually.')),
+                    Expanded(child: Text('$_rejectedCount rejected attempts were detected for this session. Review face and Bluetooth proximity before changing records manually.')),
                   ],
                 ),
               ),

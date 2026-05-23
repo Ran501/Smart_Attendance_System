@@ -9,7 +9,6 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../services/attendance_service.dart';
 import '../../../../services/catalog_service.dart';
 import '../../../../services/teacher_ble_beacon_service.dart';
-import '../../../../services/geo_fence_service.dart';
 import '../../../../widgets/app_button.dart';
 import '../../../../widgets/enterprise_shell.dart';
 import '../../../../widgets/session_timer.dart';
@@ -27,16 +26,12 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
   static const int _sessionsPerReportPage = 15;
 
   final _attendanceService = AttendanceService();
-  final _geo = GeoFenceService();
 
   List<Map<String, dynamic>> _sessions = [];
   String? _moduleClassroomId;
   String _moduleClassroomName = '';
   int _durationMinutes = AppConstants.defaultSessionDurationMinutes;
   int _sessionUnits = 1;
-  bool _gpsValidation = true;
-  bool _wifiValidation = true;
-  bool _bluetoothValidation = true;
   bool _loading = false;
   bool _starting = false;
 
@@ -125,7 +120,21 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
         durationMinutes: _durationMinutes,
         sessionUnits: _sessionUnits,
       );
-      await TeacherBleBeaconService.instance.start(session.id);
+      final beacon = await TeacherBleBeaconService.instance.start(session.id);
+      if (mounted && !beacon.success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(beacon.message),
+            backgroundColor: Colors.orange,
+            action: beacon.openSettings
+                ? SnackBarAction(
+                    label: 'Settings',
+                    onPressed: () => TeacherBleBeaconService.instance.openAppSettings(),
+                  )
+                : null,
+          ),
+        );
+      }
       if (mounted) {
         final extra = {
           'id': session.id,
@@ -709,14 +718,9 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
                     onChanged: _starting ? null : (v) => setState(() => _durationMinutes = v.round()),
                   ),
                   const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      _ValidationChip(label: 'GPS', value: _gpsValidation, icon: Icons.my_location, onChanged: (v) => setState(() => _gpsValidation = v)),
-                      _ValidationChip(label: 'WiFi', value: _wifiValidation, icon: Icons.wifi, onChanged: (v) => setState(() => _wifiValidation = v)),
-                      _ValidationChip(label: 'BLE', value: _bluetoothValidation, icon: Icons.bluetooth, onChanged: (v) => setState(() => _bluetoothValidation = v)),
-                    ],
+                  Text(
+                    'Students mark attendance using face verification and must be within ${AppConstants.bleMaxDistanceMeters.toInt()} m of your phone via Bluetooth.',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 16),
                   AppButton(label: 'Start Session', icon: Icons.play_arrow_rounded, loading: _starting, onPressed: _startSession),
@@ -728,21 +732,6 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
         ),
       ),
     );
-  }
-}
-
-class _ValidationChip extends StatelessWidget {
-  final String label;
-  final bool value;
-  final IconData icon;
-  final ValueChanged<bool> onChanged;
-
-  const _ValidationChip({required this.label, required this.value, required this.icon, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = value ? const Color(0xFF10B981) : Theme.of(context).colorScheme.outline;
-    return FilterChip(selected: value, onSelected: onChanged, avatar: Icon(icon, size: 18, color: color), label: Text(label));
   }
 }
 
