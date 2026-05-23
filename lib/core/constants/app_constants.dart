@@ -10,12 +10,12 @@ class AppConstants {
   static const double faceMatchTop2Ratio = 0.96;
   static const int defaultSessionDurationMinutes = 5;
 
-  /// Attendance proximity: Bluetooth only (~15 m from teacher phone).
-  static const double bleMaxDistanceMeters = 15;
+  /// Attendance proximity: Bluetooth only (max 10 m from teacher phone).
+  static const double bleMaxDistanceMeters = 10;
 
-  /// Stronger (less negative) RSSI = closer. ~-76 dBm ≈ 15 m for typical phones.
+  /// Stronger (less negative) RSSI = closer. ~-72 dBm ≈ 10 m for typical phones.
   static const int bleStrongRssi = -65;
-  static const int bleMinimumRssi = -76;
+  static const int bleMinimumRssi = -72;
   static const int bleScanSeconds = 8;
 
   /// GPS geofence: base radius the teacher's session covers.

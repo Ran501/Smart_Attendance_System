@@ -212,12 +212,12 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
   Future<void> _submitAttendance(List<int> bytes, Face face) async {
     setState(() {
       _submitting = true;
-      _instruction = 'Scanning for teacher Bluetooth (within 15 m)...';
+      _instruction = 'Scanning for teacher Bluetooth (within 10 m)...';
     });
 
     try {
       final sessionId = widget.sessionData['sessionId']?.toString() ?? '';
-      setState(() => _instruction = 'Scanning for teacher Bluetooth (within 15 m)...');
+      setState(() => _instruction = 'Scanning for teacher Bluetooth (within 10 m)...');
 
       final bleResult = await _ble.scanForTeacherBeacon(
         sessionId: sessionId,
@@ -416,7 +416,7 @@ class _LiveAuthScreenState extends State<LiveAuthScreen> {
                   alignment: WrapAlignment.center,
                   children: [
                     _CheckChip(label: 'Face Live', done: _faceVerified),
-                    _CheckChip(label: 'Bluetooth ≤15 m', done: _bleVerified),
+                    _CheckChip(label: 'Bluetooth ≤10 m', done: _bleVerified),
                   ],
                 ),
                 const SizedBox(height: 12),

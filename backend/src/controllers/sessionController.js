@@ -49,11 +49,13 @@ async function ensureClassroomId(classId, requestedClassroomId, latitude, longit
   );
   if (existing.rows.length) return existing.rows[0].id;
 
+  const lat = latitude != null && latitude !== '' ? parseFloat(latitude) : 0;
+  const lon = longitude != null && longitude !== '' ? parseFloat(longitude) : 0;
   const created = await pool.query(
     `INSERT INTO classrooms (name, class_id, latitude, longitude, radius_meters)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING id`,
-    ['Default Classroom', classId, latitude, longitude, 100],
+    ['Default Classroom', classId, lat, lon, 100],
   );
   return created.rows[0].id;
 }
@@ -81,6 +83,14 @@ async function createSession(req, res) {
     const duration = durationMinutes || config.defaultSessionDurationMinutes;
     const radius = radiusMeters ?? DEFAULT_HOST_RADIUS_METERS;
     const hostAccuracy = accuracy != null ? parseFloat(accuracy) : null;
+    const hostLat =
+      latitude != null && latitude !== '' && !Number.isNaN(parseFloat(latitude))
+        ? parseFloat(latitude)
+        : null;
+    const hostLon =
+      longitude != null && longitude !== '' && !Number.isNaN(parseFloat(longitude))
+        ? parseFloat(longitude)
+        : null;
     const sessionUnits = intInRange(
       req.body.sessionUnits ?? req.body.session_units ?? req.body.periodCount ?? req.body.blockPeriods,
       1,
@@ -102,8 +112,8 @@ async function createSession(req, res) {
     const safeClassroomId = await ensureClassroomId(
       classId,
       classroomId,
-      latitude,
-      longitude,
+      hostLat,
+      hostLon,
     );
 
     const sessionId = await generateSessionId(classId, subject.rows[0]?.code || classId);
@@ -125,8 +135,8 @@ async function createSession(req, res) {
         duration,
         sessionUnits,
         endsAt,
-        latitude,
-        longitude,
+        hostLat,
+        hostLon,
         radius,
         hostAccuracy,
       ],
@@ -151,7 +161,7 @@ async function createSession(req, res) {
       bleRequired: true,
       ble_beacon_name: bleBeaconName,
       bleBeaconName,
-      ble_max_distance_meters: 15,
+      ble_max_distance_meters: 10,
       classId,
       class_id: classId,
       subjectId,
@@ -164,10 +174,10 @@ async function createSession(req, res) {
       session_units: sessionUnits,
       startedAt: new Date().toISOString(),
       endsAt: endsAt.toISOString(),
-      hostLatitude: latitude,
-      hostLongitude: longitude,
-      host_latitude: latitude,
-      host_longitude: longitude,
+      hostLatitude: hostLat,
+      hostLongitude: hostLon,
+      host_latitude: hostLat,
+      host_longitude: hostLon,
       radiusMeters: radius,
       radius_meters: radius,
       className: classResult.rows[0]?.name || classId,
@@ -364,7 +374,7 @@ async function getStudentActiveSessions(req, res) {
       bleRequired: true,
       ble_beacon_name: beaconName,
       bleBeaconName: beaconName,
-      ble_max_distance_meters: 15,
+      ble_max_distance_meters: 10,
       within_radius: true,
       already_marked: parseInt(row.already_marked, 10) > 0,
     };

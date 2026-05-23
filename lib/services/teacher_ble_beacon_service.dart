@@ -4,7 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'bluetooth_validation_service.dart';
 
-/// Broadcasts the teacher's session beacon so students can verify ~15 m proximity.
+/// Broadcasts the teacher's session beacon so students can verify ~10 m proximity.
 class TeacherBleBeaconService {
   TeacherBleBeaconService._();
   static final TeacherBleBeaconService instance = TeacherBleBeaconService._();

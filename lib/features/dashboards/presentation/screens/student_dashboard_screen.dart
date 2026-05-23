@@ -629,7 +629,7 @@ class _LiveSessionBanner extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               StatusPill(
-                label: marked ? 'Already Marked' : 'Bluetooth ≤15 m at check-in',
+                label: marked ? 'Already Marked' : 'Bluetooth ≤10 m at check-in',
                 icon: marked ? Icons.check_circle : Icons.bluetooth_searching,
                 color: marked ? const Color(0xFF10B981) : const Color(0xFF3B82F6),
               ),
