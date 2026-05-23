@@ -479,19 +479,7 @@ class _AttendanceSessionScreenState extends State<AttendanceSessionScreen> {
             const SizedBox(height: 22),
             SectionTitle(
               title: 'Student Attendance Records',
-              subtitle: 'Tap the status menu to change absent to present, medical leave, or official leave.',
               trailing: _loading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : StatusPill(label: '${_attendance.length} Students', icon: Icons.groups_outlined, color: const Color(0xFF1E4ED8)),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: const [
-                StatusPill(label: 'Present', icon: Icons.check_circle_outline, color: Color(0xFF10B981)),
-                StatusPill(label: 'Medical Leave', icon: Icons.medical_services_outlined, color: Color(0xFF2563EB)),
-                StatusPill(label: 'Official Leave', icon: Icons.verified_outlined, color: Color(0xFF8B5CF6)),
-                StatusPill(label: 'Absent', icon: Icons.cancel_outlined, color: Color(0xFFEF4444)),
-              ],
             ),
             const SizedBox(height: 12),
             if (_attendance.isEmpty)

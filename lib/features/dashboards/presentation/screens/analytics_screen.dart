@@ -76,7 +76,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       classIds: classIds,
       onDataChanged: () async {
         if (mounted && !_loading) await _loadQuiet();
-        await NotificationService.instance.pulseUnreadTray();
+        await NotificationService.instance.refreshUnreadBell();
+        await NotificationService.instance.pulseAttendanceAlertsTray();
       },
       onSessionStarted: (_) {
         if (mounted && !_loading) _loadQuiet();

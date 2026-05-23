@@ -21,6 +21,12 @@ class NotificationService {
 
   bool _initialized = false;
 
+  /// Live-session tray alerts already shown this app run (by session id).
+  final Set<String> _announcedLiveSessionIds = {};
+
+  /// In-app tray already shown for these notification row ids.
+  final Set<String> _trayShownNotificationIds = {};
+
   Future<void> initialize() async {
     if (_initialized) return;
     await _requestPermissions();
@@ -175,8 +181,15 @@ class NotificationService {
 
     final notification = message.notification;
     final data = message.data;
+    final type = data['type']?.toString() ?? '';
 
-    final title = notification?.title ?? data['title'] ?? _titleForType(data['type']);
+    if (type == 'SESSION_STARTED') {
+      await showLiveSessionFromPayloadOnce(Map<String, dynamic>.from(data));
+      await unreadCountNotifier.refresh();
+      return;
+    }
+
+    final title = notification?.title ?? data['title'] ?? _titleForType(type);
     final body = notification?.body ?? data['body'];
     if (title == null || title.isEmpty || body == null || body.isEmpty) return;
 
@@ -200,7 +213,22 @@ class NotificationService {
     );
   }
 
-  Future<void> showSessionStartedFromPayload(Map<String, dynamic> payload) async {
+  String? _sessionIdFromPayload(Map<String, dynamic> payload) {
+    final raw = payload['sessionId'] ??
+        payload['session_id'] ??
+        payload['id'];
+    final id = raw?.toString().trim();
+    return (id == null || id.isEmpty) ? null : id;
+  }
+
+  /// Show live-session tray once per session id (socket + FCM safe).
+  Future<void> showLiveSessionFromPayloadOnce(Map<String, dynamic> payload) async {
+    final sessionId = _sessionIdFromPayload(payload);
+    if (sessionId != null) {
+      if (_announcedLiveSessionIds.contains(sessionId)) return;
+      _announcedLiveSessionIds.add(sessionId);
+    }
+
     final subject =
         payload['subjectName'] ?? payload['subject_name'] ?? payload['subject_code'] ?? 'Your module';
     final className = payload['className'] ?? payload['class_name'] ?? '';
@@ -211,8 +239,16 @@ class NotificationService {
         ? '$subject ($className) is live. Mark attendance within $range m.'
         : '$subject is live. Mark attendance within $range m.';
 
-    await showSessionStartedAlert(title: title, body: body);
+    await showSessionStartedAlert(
+      title: title,
+      body: body,
+      notificationId: sessionId?.hashCode,
+    );
   }
+
+  @Deprecated('Use showLiveSessionFromPayloadOnce')
+  Future<void> showSessionStartedFromPayload(Map<String, dynamic> payload) =>
+      showLiveSessionFromPayloadOnce(payload);
 
   Future<void> _showTrayNotification({
     required int id,
@@ -241,16 +277,61 @@ class NotificationService {
     }
   }
 
-  /// After realtime attendance events: refresh bell count and show tray if unread.
-  Future<void> pulseUnreadTray() async {
+  static const _attendanceAlertTypes = {
+    'ATTENDANCE_WARNING',
+    'ATTENDANCE_DANGER',
+    'TEACHER_ATTENDANCE_ALERT',
+  };
+
+  DateTime? _parseCreatedAt(Map<String, dynamic> item) {
+    final raw = item['created_at'] ?? item['createdAt'];
+    if (raw == null) return null;
+    return DateTime.tryParse(raw.toString())?.toLocal();
+  }
+
+  /// Refresh bell only — no tray popup (use after background data sync).
+  Future<void> refreshUnreadBell() async {
+    await unreadCountNotifier.refresh();
+  }
+
+  /// Show tray for new attendance-warning rows only (not live session).
+  Future<void> pulseAttendanceAlertsTray({Duration maxAge = const Duration(minutes: 2)}) async {
     try {
       await unreadCountNotifier.refresh();
-      if (unreadCountNotifier.value > 0) {
-        await alertLatestUnreadWithSound();
+      final items = await fetchNotifications();
+      final cutoff = DateTime.now().subtract(maxAge);
+
+      for (final item in items) {
+        if (item['is_read'] == true) continue;
+        final type = item['type']?.toString() ?? '';
+        if (!_attendanceAlertTypes.contains(type)) continue;
+
+        final id = item['id']?.toString();
+        if (id != null && _trayShownNotificationIds.contains(id)) continue;
+
+        final created = _parseCreatedAt(item);
+        if (created != null && created.isBefore(cutoff)) continue;
+
+        final title = (item['title'] as String?)?.trim();
+        final body = (item['body'] as String?)?.trim();
+        if (title == null || title.isEmpty || body == null || body.isEmpty) continue;
+
+        if (id != null) _trayShownNotificationIds.add(id);
+        await _showTrayNotification(
+          id: id?.hashCode ?? DateTime.now().millisecondsSinceEpoch,
+          title: title,
+          body: body,
+        );
+        break;
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[Notify] pulseUnreadTray: $e');
+      if (kDebugMode) debugPrint('[Notify] pulseAttendanceAlertsTray: $e');
     }
+  }
+
+  /// Prefer attendance-only tray; never re-shows old live-session unread rows.
+  Future<void> pulseUnreadTray() async {
+    await pulseAttendanceAlertsTray();
   }
 
   Future<void> syncTokenWithBackend() async {

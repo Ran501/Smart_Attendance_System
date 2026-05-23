@@ -130,28 +130,19 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
       if (_joinedModules.isNotEmpty) _joinClassRooms();
       await _fetchSessionsFromApi();
       if (raw is Map) {
-        await NotificationService.instance.showSessionStartedFromPayload(
+        await NotificationService.instance.showLiveSessionFromPayloadOnce(
           Map<String, dynamic>.from(raw),
         );
       }
-      await NotificationService.instance.pulseUnreadTray();
+      await NotificationService.instance.refreshUnreadBell();
     });
     _socket!.on('session:closed', (_) async {
       await _fetchSessionsFromApi();
       await _refreshDashboard();
     });
-    _socket!.on('attendance:updated', (_) async {
-      await _refreshDashboard();
-      await NotificationService.instance.pulseUnreadTray();
-    });
-    _socket!.on('attendance:marked', (_) async {
-      await _refreshDashboard();
-      await NotificationService.instance.pulseUnreadTray();
-    });
-    _socket!.on('attendance:record-updated', (_) async {
-      await _refreshDashboard();
-      await NotificationService.instance.pulseUnreadTray();
-    });
+    _socket!.on('attendance:updated', (raw) => _onClassAttendanceEvent(raw));
+    _socket!.on('attendance:marked', (raw) => _onClassAttendanceEvent(raw));
+    _socket!.on('attendance:record-updated', (raw) => _onClassAttendanceEvent(raw));
     _joinStudentRoom();
   }
 
@@ -159,6 +150,20 @@ class _StudentDashboardScreenState extends ConsumerState<StudentDashboardScreen>
     final user = ref.read(authStateProvider).valueOrNull;
     if (user?.id != null) {
       _socket?.emit('join:student', user!.id);
+    }
+  }
+
+  Future<void> _onClassAttendanceEvent(dynamic raw) async {
+    await _refreshDashboard();
+    await NotificationService.instance.refreshUnreadBell();
+
+    final userId = ref.read(authStateProvider).valueOrNull?.id;
+    if (userId == null) return;
+    if (raw is! Map) return;
+
+    final targetStudentId = (raw['studentId'] ?? raw['student_id'])?.toString();
+    if (targetStudentId != null && targetStudentId == userId) {
+      await NotificationService.instance.pulseAttendanceAlertsTray();
     }
   }
 

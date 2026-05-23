@@ -73,7 +73,8 @@ class _TeacherDashboardScreenState extends ConsumerState<TeacherDashboardScreen>
 
   Future<void> _onAttendanceRealtime() async {
     await _loadQuiet();
-    await NotificationService.instance.pulseUnreadTray();
+    await NotificationService.instance.refreshUnreadBell();
+    await NotificationService.instance.pulseAttendanceAlertsTray();
   }
 
   /// Refresh without full-screen loading spinner (socket / poll).

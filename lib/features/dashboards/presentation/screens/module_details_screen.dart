@@ -66,15 +66,15 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
       studentUserId: user?.id,
       onDataChanged: () async {
         if (mounted) await _loadQuiet();
-        await NotificationService.instance.pulseUnreadTray();
+        await NotificationService.instance.refreshUnreadBell();
       },
       onSessionStarted: (raw) async {
         if (raw is Map) {
-          await NotificationService.instance.showSessionStartedFromPayload(
+          await NotificationService.instance.showLiveSessionFromPayloadOnce(
             Map<String, dynamic>.from(raw),
           );
         }
-        await NotificationService.instance.pulseUnreadTray();
+        await NotificationService.instance.refreshUnreadBell();
       },
       onSessionClosed: (_) {
         if (mounted) _loadQuiet();

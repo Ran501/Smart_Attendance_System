@@ -90,7 +90,10 @@ async function createSession(req, res) {
 
     const safeClassroomId = await ensureClassroomId(classId, classroomId);
 
-    const sessionId = await generateSessionId(classId, subject.rows[0]?.code || classId);
+    const sessionId = await generateSessionId(
+      subjectId,
+      subject.rows[0]?.code || classId,
+    );
     const sessionToken = generateSessionToken();
     const endsAt = new Date(Date.now() + duration * 60 * 1000);
 

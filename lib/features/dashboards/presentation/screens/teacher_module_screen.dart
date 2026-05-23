@@ -76,7 +76,8 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
       classIds: [_classId],
       onDataChanged: () async {
         if (mounted) await _loadQuiet();
-        await NotificationService.instance.pulseUnreadTray();
+        await NotificationService.instance.refreshUnreadBell();
+        await NotificationService.instance.pulseAttendanceAlertsTray();
       },
       onSessionStarted: (_) {
         if (mounted) _loadQuiet();
@@ -880,7 +881,6 @@ class _TeacherModuleScreenState extends State<TeacherModuleScreen> {
                     decoration: const InputDecoration(
                       labelText: 'Session length (hours)',
                       prefixIcon: Icon(Icons.view_timeline_outlined),
-                      helperText: '1 session = 1 hour • 2 sessions = 2 hours • 3 sessions = 3 hours',
                     ),
                     items: const [
                       DropdownMenuItem(value: 1, child: Text('1 Session (1 hour)')),
